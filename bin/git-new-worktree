@@ -1,0 +1,206 @@
+#!/bin/sh
+#
+# git-new-worktree -- add a worktree beside the others, creating the branch if
+# it does not exist yet.
+#
+# Reachable as `git new-worktree` as well as by its own name: git looks for a
+# `git-new-worktree` in PATH before it consults aliases.
+#
+# The worktree path is the only thing printed on stdout, so a shell wrapper can
+# cd into it -- a script cannot change its caller's directory:
+#
+#     gwt() { local d; d=$(git new-worktree "$@") || return; cd "$d"; }
+#
+# Replaces the git-new-worktree / git-checkout-worktree shell functions; which
+# of the two you wanted is decided by whether the branch already exists.
+
+set -eu
+
+# See the same note in git-refresh: an alias entry point exports GIT_DIR and
+# would retarget every git call below.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+
+PROG=$(basename "$0")
+BRANCH=""
+BASE_ARG=""
+FORCE=0
+
+usage() {
+    cat <<EOF
+Usage: git new-worktree <branch> [<base>]
+
+Adds a worktree for <branch> next to the repository's other worktrees, then
+prints its path. Fetches first, and fast-forwards origin's default branch from
+upstream's when an \`upstream\` remote exists.
+
+  <branch>  Checked out if it already exists locally, tracked if it exists on
+            origin, otherwise created.
+  <base>    Branch point for a new branch. Defaults to origin's default branch.
+            A bare name is looked up under origin first.
+
+A plain clone has no sibling worktrees to add to. You are offered a conversion
+to the layout, which requires a pristine checkout: no changes, nothing
+untracked, nothing ignored.
+
+Options:
+  -f, --force  Convert without asking.
+  -h, --help   This text.
+EOF
+}
+
+die() { printf '❌ %s\n' "$*" >&2; exit 1; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -f|--force) FORCE=1 ;;
+        -h|--help)  usage; exit 0 ;;
+        --)         shift; break ;;
+        -*)         printf '%s: unknown option: %s\n' "$PROG" "$1" >&2; usage >&2; exit 2 ;;
+        *)          break ;;
+    esac
+    shift
+done
+
+[ $# -ge 1 ] || { usage >&2; exit 2; }
+BRANCH=$1
+shift
+[ $# -eq 0 ] || { BASE_ARG=$1; shift; }
+[ $# -eq 0 ] || die "expected at most a branch and a base"
+
+command -v git >/dev/null 2>&1 || die "git not found in PATH"
+git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
+
+TOP=$(git rev-parse --show-toplevel 2>/dev/null) || TOP=""
+[ -n "$TOP" ] || die "no working tree here; run this from inside one of the worktrees"
+
+# Worktrees are siblings of the repository: <repo>/.git holds the history and
+# <repo>/<branch> the checkouts. Deriving this from the git dir rather than from
+# the current checkout keeps it right both before and after a conversion.
+GIT_COMMON=$(git rev-parse --path-format=absolute --git-common-dir)
+WT_BASE_DIR=$(dirname "$GIT_COMMON")
+
+# A plain clone puts its one checkout where the worktrees belong, so it has to
+# be converted before a worktree can be added beside it.
+if [ "$(git config --get core.bare || echo false)" != "true" ]; then
+    [ "$TOP" = "$WT_BASE_DIR" ] \
+        || die "this is a linked worktree of a non-bare clone; convert from $WT_BASE_DIR"
+    [ "$(git worktree list | wc -l | tr -d ' ')" = "1" ] \
+        || die "this clone already has linked worktrees; convert it by hand"
+
+    CUR=$(git branch --show-current)
+    [ -n "$CUR" ] || die "detached HEAD; check out a branch before converting"
+
+    # Conversion deletes the old checkout and lets `git worktree add` lay it
+    # down again, so anything git is not tracking would not come back.
+    LEFTOVER=$(git status --porcelain --ignored | grep -c . || true)
+    if [ "$LEFTOVER" -gt 0 ]; then
+        printf '❌ %s untracked/ignored/modified files in this checkout\n' "$LEFTOVER" >&2
+        printf '   re-run this script after cleaning:\n' >&2
+        printf '     git clean -ndx    # review\n' >&2
+        printf '     git clean -fdx    # remove\n' >&2
+        exit 1
+    fi
+
+    if [ "$FORCE" -eq 0 ]; then
+        [ -t 0 ] || die "cannot prompt for conversion; re-run with --force"
+        printf 'Convert %s to a worktree layout?\n' "$TOP" >&2
+        printf '  .git becomes bare and %s moves to %s/%s\n' "$CUR" "$TOP" "$CUR" >&2
+        printf '[y/N] ' >&2
+        read -r REPLY
+        case "$REPLY" in [yY]*) ;; *) die "not converted" ;; esac
+    fi
+
+    cd "$TOP"
+    git config core.bare true
+    for entry in * .[!.]* ..?*; do
+        [ -e "$entry" ] || continue
+        [ "$entry" = ".git" ] || rm -rf -- "$entry"
+    done
+    git worktree add "$TOP/$CUR" "$CUR" >&2
+    printf '🔧 converted; %s is now at %s/%s\n' "$CUR" "$TOP" "$CUR" >&2
+fi
+
+DIR="$WT_BASE_DIR/$BRANCH"
+
+# Already laid down. Whoever typed `gwt <branch>` wants to be in it, and there
+# is nothing to create, so hand back the path before the fetch rather than
+# refusing over a worktree that is exactly what was asked for.
+if [ -e "$DIR" ]; then
+    HERE=$(git -C "$DIR" branch --show-current 2>/dev/null) || HERE=""
+    [ "$HERE" = "$BRANCH" ] \
+        || die "$DIR already exists and is not a worktree for $BRANCH"
+    printf '📂 %s already checked out at %s\n' "$BRANCH" "$DIR" >&2
+    printf '%s\n' "$DIR"
+    exit 0
+fi
+
+has_remote() { git remote | grep -x "$1" >/dev/null 2>&1; }
+
+remote_head() {
+    _ref=$(git symbolic-ref --quiet --short "refs/remotes/$1/HEAD" 2>/dev/null) || _ref=""
+    if [ -z "$_ref" ]; then
+        git remote set-head "$1" --auto >/dev/null 2>&1 || true
+        _ref=$(git symbolic-ref --quiet --short "refs/remotes/$1/HEAD" 2>/dev/null) || _ref=""
+    fi
+    printf '%s' "${_ref#"$1"/}"
+}
+
+printf '📥 Fetching...\n' >&2
+git fetch --all --prune >&2
+
+DEF=$(remote_head origin)
+[ -n "$DEF" ] || die "cannot resolve origin/HEAD; run: git remote set-head origin --auto"
+
+if has_remote upstream; then
+    if ! git rev-parse --verify --quiet "refs/remotes/upstream/$DEF" >/dev/null; then
+        printf '⚠️  upstream has no %s; leaving origin/%s alone\n' "$DEF" "$DEF" >&2
+    # Braces are load-bearing: a zsh reader would take `$DEF:r` as a modifier.
+    elif PUSH_OUT=$(git push origin "upstream/${DEF}:refs/heads/${DEF}" 2>&1); then
+        case "$PUSH_OUT" in
+            *'Everything up-to-date'*) printf '➖ origin/%s already matches upstream\n' "$DEF" >&2 ;;
+            *)                         printf '⬆️  origin/%s fast-forwarded from upstream\n' "$DEF" >&2 ;;
+        esac
+    else
+        printf '⚠️  origin/%s has diverged from upstream/%s; branching from origin as-is\n' "$DEF" "$DEF" >&2
+    fi
+fi
+
+if [ -n "$BASE_ARG" ]; then
+    if git rev-parse --verify --quiet "refs/remotes/origin/$BASE_ARG" >/dev/null; then
+        BASE="origin/$BASE_ARG"
+    elif git rev-parse --verify --quiet "$BASE_ARG" >/dev/null; then
+        BASE=$BASE_ARG
+    else
+        die "no such base: $BASE_ARG"
+    fi
+else
+    BASE="origin/$DEF"
+fi
+
+if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+    git worktree add "$DIR" "$BRANCH" >&2
+    # A bare clone lands every branch in refs/heads with no upstream, so a
+    # local branch here is not evidence that it is connected to the origin
+    # branch it came from. Reconnect it rather than hand back a worktree whose
+    # branch and origin/<branch> only look related.
+    if ! git -C "$DIR" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1 \
+       && git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null; then
+        git -C "$DIR" branch --set-upstream-to "origin/$BRANCH" >&2
+    fi
+    printf '📂 %s checked out at %s\n' "$BRANCH" "$DIR" >&2
+elif git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null; then
+    git worktree add --track -b "$BRANCH" "$DIR" "origin/$BRANCH" >&2
+    printf '📂 %s checked out at %s, tracking origin/%s\n' "$BRANCH" "$DIR" "$BRANCH" >&2
+else
+    # Branching from origin/<default> would otherwise leave that as the new
+    # branch's upstream, which is the wrong branch: every branch here wants
+    # origin/<its own name>, set by the first `git push -u`. What a wrong
+    # upstream costs depends on push.default, so do not leave one behind.
+    git worktree add --no-track -b "$BRANCH" "$DIR" "$BASE" >&2
+    # The moment the base is known for certain. Without it a branch has no base
+    # until its PR exists, and `git refresh --all` has nothing to rebase it onto.
+    git config "branch.$BRANCH.base" "${BASE#origin/}"
+    printf '📂 %s created at %s from %s\n' "$BRANCH" "$DIR" "$BASE" >&2
+fi
+
+printf '%s\n' "$DIR"
