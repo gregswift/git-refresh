@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Nothing here writes anything; release-please is the workflow that needs write
+# access, and it is a separate file for that reason.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The suite builds its own repositories and never reaches the network, so
+      # there is nothing to install beyond what the runner already has. mandoc
+      # is the exception: without it the man pages go unchecked.
+      - name: Install mandoc
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq mandoc
+
+      - name: git version under test
+        run: git --version
+
+      - run: make check

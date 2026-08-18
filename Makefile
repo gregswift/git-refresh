@@ -37,11 +37,18 @@ uninstall:
 	for m in $(MANS); do rm -f $(MANDIR)/$$m; done
 	rm -rf $(SHAREDIR) $(DOCDIR)
 
-# Syntax only. The behavioural suite is tests/run-tests.
+# Syntax, then the man pages, then behaviour.
 check:
 	@for b in $(BINS); do sh -n bin/$$b && echo "ok  bin/$$b"; done
 	@sh -n shell/gwt.sh && echo "ok  shell/gwt.sh"
-	@test -x tests/run-tests && tests/run-tests || echo "no tests/run-tests yet"
+	@for f in tests/run-tests tests/lib.sh tests/stubs/gh tests/cases/*.sh; do \
+		sh -n $$f && echo "ok  $$f"; done
+	@if command -v mandoc >/dev/null 2>&1; then \
+		mandoc -T lint man/*.1 && echo "ok  man pages"; \
+	else \
+		echo "skip  man pages (no mandoc)"; \
+	fi
+	@tests/run-tests
 
 clean:
 	@:
