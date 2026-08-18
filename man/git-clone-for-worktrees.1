@@ -1,0 +1,226 @@
+.\" Manual page for git-clone-for-worktrees.
+.\" Hand-written roff. There is no generator; edit this file directly.
+.TH GIT\-CLONE\-FOR\-WORKTREES 1 "2026-08-18" "git-refresh" "Git Extras"
+.
+.SH NAME
+git\-clone\-for\-worktrees \- clone a repository as a bare repo with its
+default branch checked out beside it
+.
+.SH SYNOPSIS
+.B git clone\-for\-worktrees
+.I repo
+.RB [ \-\-upstream
+.IR repo ]
+.br
+.B git clone\-for\-worktrees
+.B \-h
+.PP
+Also installed as
+.BR git\-clone\-for\-worktrees ,
+and reachable as
+.B git clone\-for\-worktrees
+without an alias: git looks for a
+.B git\-clone\-for\-worktrees
+in
+.B PATH
+before it consults aliases.
+.
+.SH DESCRIPTION
+.B git clone\-for\-worktrees
+clones
+.I repo
+into
+.IB ./ name /.git
+as a bare repository and checks its default branch out to
+.IB ./ name / <branch>\fR,
+ready for
+.BR git\-new\-worktree (1)
+to add the rest:
+.PP
+.EX
+myrepo/
+  .git/     the bare repository: history, objects, config
+  main/     a worktree for the default branch
+.EE
+.PP
+.I name
+is the last path component of
+.IR repo ,
+with any
+.B .git
+suffix removed. The directory must not already exist.
+.PP
+Only the default branch is checked out. Every other branch is a worktree you add
+when you want it, rather than one directory per branch the remote happens to
+have.
+.PP
+The run does the four things a bare clone does not do by itself:
+.IP \(bu 3
+Sets
+.B remote.origin.fetch
+to
+.BR +refs/heads/*:refs/remotes/origin/* .
+A bare clone leaves it unset, so
+.B refs/remotes/origin/*
+stays empty and every later fetch brings back nothing. The worktrees need those
+refs to track against.
+.IP \(bu 3
+Adds and fetches
+.B upstream
+when the repository is a fork; see
+.B Forks
+below.
+.IP \(bu 3
+Resolves origin's default branch with
+.B "git remote set\-head origin \-\-auto"
+and adds a worktree for it. If origin has no branches there is nothing to check
+out and the run fails.
+.IP \(bu 3
+Sets that worktree's upstream to
+.IR origin/ <default>.
+A bare clone copies branches into
+.B refs/heads
+with no upstream, so the checkout would otherwise sit disconnected from the
+origin branch it was made from.
+.PP
+Nothing here acts on a repository you happen to be standing in:
+.BR GIT_DIR ,
+.BR GIT_WORK_TREE ,
+.B GIT_INDEX_FILE
+and
+.B GIT_PREFIX
+are unset before anything else runs.
+.
+.SS Repository spec
+.I repo
+is either
+.IR owner/name ,
+which becomes an ssh URL
+.RI ( git@github.com: owner / name .git ),
+or any URL git already understands. A scheme
+.RB ( ://\& ),
+an scp\-style host
+.RI ( user@host : path ),
+or a filesystem path
+.RB ( / ,
+.BR ./ ,
+.BR ../ ,
+.BR ~/ )
+is passed through untouched. Anything else is refused rather than guessed at.
+.
+.SS Forks
+When
+.I repo
+is given as
+.IR owner/name ,
+.BR gh (1)
+is installed, and the repository is a GitHub fork, its parent is added as the
+.B upstream
+remote automatically and fetched. That is the one thing git cannot work out from
+the URL.
+.B \-\-upstream
+names one by hand, and overrides the automatic lookup.
+.PP
+.BR gh (1)
+is optional. Without it,
+.B \-\-upstream
+is the only way to get an
+.B upstream
+remote, and nothing else changes.
+.PP
+Once
+.B upstream
+exists, every
+.BR git\-refresh (1)
+run begins by fast\-forwarding origin's default branch from it, after which
+everything is a plain origin workflow.
+.
+.SH OPTIONS
+.TP
+.I repo
+The repository to clone.
+.I owner/name
+or any URL git understands. Exactly one is expected.
+.TP
+.BI \-\-upstream " repo"
+Add this as the
+.B upstream
+remote and fetch it. Takes the same forms as
+.IR repo .
+Only needed to override the automatic fork lookup, or when
+.BR gh (1)
+is not installed.
+.TP
+.BR \-h ", " \-\-help
+Print the usage summary and exit 0.
+.
+.SH ENVIRONMENT
+.TP
+.BR GIT_DIR ", " GIT_WORK_TREE ", " GIT_INDEX_FILE ", " GIT_PREFIX
+Unset before anything else runs, so the clone cannot be aimed at a repository
+you are standing in.
+.
+.SH FILES
+.TP
+.IB ./ name /.git
+The bare repository created by the clone.
+.TP
+.IB ./ name / <default\-branch>
+The worktree for origin's default branch, tracking
+.IR origin/ <default\-branch>.
+.
+.SH EXIT STATUS
+.TP
+.B 0
+The bare repository and the default branch's worktree were created.
+.TP
+.B 1
+Fatal error: the target directory exists, git is missing, the repository spec
+could not be understood,
+.B \-\-upstream
+was given without a value, more than one repository was named, origin has no
+default branch, or git itself failed.
+.TP
+.B 2
+Usage error: an unknown option, or no repository given.
+.
+.SH EXAMPLES
+Clone over ssh into
+.IR ./git\-refresh/ :
+.PP
+.EX
+git clone\-for\-worktrees gregswift/git\-refresh
+cd git\-refresh/main
+.EE
+.PP
+Clone a fork and name its parent yourself:
+.PP
+.EX
+git clone\-for\-worktrees gregswift/fork \-\-upstream upstream\-owner/repo
+.EE
+.PP
+Clone from a URL git already understands:
+.PP
+.EX
+git clone\-for\-worktrees https://github.com/gregswift/git\-refresh.git
+.EE
+.PP
+Then add branches and keep them current:
+.PP
+.EX
+gwt my\-feature
+git refresh \-\-all
+.EE
+.
+.SH SEE ALSO
+.BR git\-refresh (1),
+.BR git\-new\-worktree (1),
+.BR git\-worktree (1),
+.BR git\-clone (1),
+.BR git\-rebase (1),
+.BR git\-push (1),
+.BR gh (1)
+.
+.SH AUTHORS
+Greg Swift. A descendant of the script in Christopher Allen's
+.IR "Git Worktree Best Practices and Tools" .

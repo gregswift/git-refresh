@@ -1,0 +1,312 @@
+.\" Manual page for git-new-worktree.
+.\" Hand-written roff. There is no generator; edit this file directly.
+.TH GIT\-NEW\-WORKTREE 1 "2026-08-18" "git-refresh" "Git Extras"
+.
+.SH NAME
+git\-new\-worktree \- add a worktree beside the others, creating the
+branch if it does not exist
+.
+.SH SYNOPSIS
+.B git new\-worktree
+.RB [ \-f ]
+.I branch
+.RI [ base ]
+.br
+.B git new\-worktree
+.B \-h
+.PP
+Also installed as
+.BR git\-new\-worktree ,
+and reachable as
+.B git new\-worktree
+without an alias: git looks for a
+.B git\-new\-worktree
+in
+.B PATH
+before it consults aliases.
+.
+.SH DESCRIPTION
+.B git new\-worktree
+adds a worktree for
+.I branch
+next to the repository's other worktrees, then prints its path. It replaces the
+usual pair of "new branch" and "check out existing branch" helpers: which of the
+two you wanted is decided by whether the branch already exists.
+.PP
+Worktrees are siblings of the bare repository, one directory per branch, named
+after the branch:
+.PP
+.EX
+myrepo/
+  .git/              the bare repository
+  main/              a worktree
+  add\-billing\-ui/    a worktree
+.EE
+.PP
+The layout is derived from the git common directory rather than from the current
+checkout, so it is right both before and after a conversion.
+.PP
+Unless the worktree already exists, the run fetches every remote first, and
+fast\-forwards origin's default branch from
+.BR upstream 's
+when an
+.B upstream
+remote exists. If the two have genuinely diverged it says so and branches from
+origin as\-is.
+.PP
+What happens then depends on
+.IR branch :
+.IP \(bu 3
+The worktree directory already exists: its path is printed and the command
+exits 0. See
+.B "Already checked out"
+below.
+.IP \(bu 3
+The branch exists locally: it is checked out into the new worktree. A bare clone
+lands every branch in
+.B refs/heads
+with no upstream, so if the branch has none and
+.IR origin/ branch
+exists, the upstream is set.
+.IP \(bu 3
+The branch exists on origin but not locally: it is created with
+.B \-\-track
+against
+.IR origin/ branch.
+.IP \(bu 3
+Neither: the branch is created from
+.I base
+with
+.BR \-\-no\-track ,
+and
+.IB branch. <name> .base
+is recorded. See
+.B "Recording the base"
+below.
+.
+.SS Recording the base
+When \(em and only when \(em this command creates a branch, it writes the branch
+point into git config:
+.PP
+.EX
+git config branch.<branch>.base <base>
+.EE
+.PP
+.I base
+is stored without any
+.B origin/
+prefix. This is the one moment the branch point is known for certain, and it is
+what
+.BR git\-refresh (1)
+reads to find the right base before a pull request exists. Without it, a branch
+has no base until its pull request is opened and
+.B "git refresh \-\-all"
+has nothing to rebase it onto \(em it reports the branch as
+.B "no base"
+and leaves it alone. The key is plain git config and is safe to set or correct
+by hand.
+.PP
+The new branch is created
+.B \-\-no\-track
+on purpose. Branching from
+.IR origin/ <default>
+would otherwise leave that as the new branch's upstream, which is the wrong
+branch: every branch here wants
+.IR origin/ <its\ own\ name>,
+set by the first
+.BR "git push \-u" .
+Setting
+.B push.autoSetupRemote
+to
+.B true
+makes a plain
+.B git push
+do that for you.
+.
+.SS Converting an existing clone
+A plain clone has no sibling worktrees to add to: its one checkout sits where
+the worktrees belong. Run
+.B git new\-worktree
+inside one and it offers to convert the clone in place \(em
+.B .git
+becomes bare
+.RB ( core.bare
+is set
+.BR true )
+and the current checkout moves to
+.IR repo / <current\-branch>/.
+.PP
+The conversion deletes the old checkout and lets
+.B "git worktree add"
+lay it down again, so anything git is not tracking would not come back. It
+therefore
+.B requires a pristine checkout:
+no modified files, nothing untracked, nothing ignored, as judged by
+.BR "git status \-\-porcelain \-\-ignored" .
+Anything left over is refused with the
+.B "git clean \-ndx"
+and
+.B "git clean \-fdx"
+commands to review and remove it.
+.PP
+.BR \-f ", " \-\-force
+skips the interactive prompt.
+.B It does not skip the pristine check.
+There is no flag that does; clean the checkout instead. Conversion is also
+refused from a linked worktree of a non\-bare clone (convert from the main
+worktree), from a clone that already has linked worktrees (convert that by
+hand), from a detached HEAD, and on a non\-interactive standard input without
+.BR \-\-force .
+.
+.SS Already checked out
+If the worktree directory for
+.I branch
+already exists and holds that branch, the path is printed and the command exits
+.BR 0 ,
+before the fetch, rather than failing over a worktree that is exactly what was
+asked for. Whoever typed
+.B "gwt \fIbranch\fP"
+wants to be in it, and there is nothing to create. A directory of that name
+holding some other branch is an error.
+.PP
+This is what makes
+.B gwt
+usable as one command for both "make me this branch" and "take me to this
+branch".
+.
+.SS Output streams
+The worktree path, and nothing else, goes to
+.BR stdout .
+Every message, prompt and passed\-through git command output goes to
+.BR stderr .
+.PP
+That split exists because a script cannot change its caller's directory, so the
+.B cd
+has to happen in your shell. The
+.B gwt
+shell function \(em installed as
+.I share/git\-refresh/gwt.sh
+\(em captures stdout and nothing else:
+.PP
+.EX
+gwt() {
+    local d
+    d=$(git new\-worktree "$@") || return
+    cd "$d"
+}
+.EE
+.PP
+Anything printed on stdout that is not the path would break that
+.BR cd ,
+which is why the messages are on stderr even when they are good news.
+.
+.SH OPTIONS
+.TP
+.I branch
+The branch to add a worktree for. Checked out if it already exists locally,
+tracked if it exists on origin, otherwise created.
+.TP
+.I base
+Branch point for a new branch. Defaults to origin's default branch. A bare name
+is looked up under origin first, so
+.B main
+means
+.B origin/main
+where that exists, falling back to any other ref of that name. Ignored when the
+branch already exists.
+.TP
+.BR \-f ", " \-\-force
+Convert a plain clone to the worktree layout without asking. Skips the prompt,
+not the pristine\-checkout check.
+.TP
+.BR \-h ", " \-\-help
+Print the usage summary and exit 0.
+.TP
+.B \-\-
+End of options. The next arguments are
+.I branch
+and
+.IR base .
+.
+.SH ENVIRONMENT
+.TP
+.BR GIT_DIR ", " GIT_WORK_TREE ", " GIT_INDEX_FILE ", " GIT_PREFIX
+Unset before anything else runs, so that the git alias entry point cannot
+retarget the git calls in the run.
+.
+.SH FILES
+.TP
+.IB repo /.git
+The bare repository. Worktrees are its siblings,
+.IB repo / <branch>\fR.
+.TP
+.I $PREFIX/share/git\-refresh/gwt.sh
+The
+.B gwt
+shell function. Source it from your shell rc.
+.
+.SH EXIT STATUS
+.TP
+.B 0
+The worktree exists and its path was printed \(em whether this run created it or
+found it already there.
+.TP
+.B 1
+Fatal error: not in a repository, no such base, more than a branch and a base
+given, a directory in the way that is not a worktree for this branch, a
+conversion declined or refused, or a checkout that is not pristine.
+.TP
+.B 2
+Usage error: an unknown option, or no branch given.
+.
+.SH EXAMPLES
+New branch off the default branch, with the base recorded, and cd'd into it:
+.PP
+.EX
+gwt my\-feature
+.EE
+.PP
+New branch stacked on another, so
+.B git refresh
+rebases it onto that one:
+.PP
+.EX
+gwt add\-billing\-ui add\-billing\-writes
+.EE
+.PP
+Check out a branch that already exists on origin:
+.PP
+.EX
+gwt colleagues\-branch
+.EE
+.PP
+Without the shell function, taking the path yourself:
+.PP
+.EX
+cd "$(git new\-worktree my\-feature)"
+.EE
+.PP
+Convert a plain clone to the worktree layout, no prompt:
+.PP
+.EX
+cd ~/some\-plain\-clone
+git clean \-fdx
+git new\-worktree \-f my\-feature
+.EE
+.PP
+Correct a recorded base by hand:
+.PP
+.EX
+git config branch.my\-feature.base add\-billing\-writes
+.EE
+.
+.SH SEE ALSO
+.BR git\-refresh (1),
+.BR git\-clone\-for\-worktrees (1),
+.BR git\-worktree (1),
+.BR git\-rebase (1),
+.BR git\-push (1)
+.
+.SH AUTHORS
+Greg Swift. The worktree layout comes from Christopher Allen's
+.IR "Git Worktree Best Practices and Tools" .
