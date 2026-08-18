@@ -1,0 +1,76 @@
+#!/bin/sh
+#
+# A stand-in for gh, so base resolution and stack ordering are testable without
+# a network or a GitHub repository. It answers only the four shapes git-refresh
+# asks for, and fails loudly on anything else rather than returning empty, which
+# would look exactly like "no pull requests" and pass a test that should not.
+#
+# Reads $GH_FIXTURE: one pull request per line, tab separated, no header.
+#
+#     <head branch>  <state>  <base branch>  <number>
+#
+# state is OPEN, MERGED or CLOSED.
+
+set -eu
+
+: "${GH_FIXTURE:=/dev/null}"
+TAB=$(printf '\t')
+
+die() { printf 'gh stub: unhandled invocation: %s\n' "$*" >&2; exit 64; }
+
+# Every predicate the callers combine, applied to one fixture line.
+match() {  # $1 = state filter (or -), $2 = head filter (or -)
+    while IFS="$TAB" read -r _head _state _base _num; do
+        [ -n "${_num:-}" ] || continue
+        [ "$1" = "-" ] || [ "$1" = "$_state" ] || continue
+        [ "$2" = "-" ] || [ "$2" = "$_head" ] || continue
+        printf '%s\t%s\t%s\t%s\n' "$_head" "$_state" "$_base" "$_num"
+    done <"$GH_FIXTURE"
+}
+
+case "${1:-}" in
+    repo)
+        # `gh repo view --json nameWithOwner --jq .nameWithOwner`
+        printf '%s\n' "${GH_REPO:-testowner/testrepo}"
+        exit 0 ;;
+    pr) ;;
+    *) die "$@" ;;
+esac
+shift
+
+STATE=- ; HEAD=- ; JQ="" ; JSON=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        list)      ;;
+        -R)        shift ;;
+        --state)   shift; case "$1" in all) STATE=- ;; *) STATE=$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]') ;; esac ;;
+        --head)    shift; HEAD=$1 ;;
+        --limit)   shift ;;
+        --json)    shift; JSON=$1 ;;
+        --jq)      shift; JQ=$1 ;;
+        *)         die "pr $*" ;;
+    esac
+    shift
+done
+
+# The four --jq expressions the callers use, matched on what they select rather
+# than on the whole string, so whitespace changes upstream do not break this.
+case "$JQ" in
+    *'.headRefName, .baseRefName'*)
+        match "$STATE" "$HEAD" | while IFS="$TAB" read -r h s b n; do
+            printf '%s\t%s\n' "$h" "$b"
+        done ;;
+    *'.headRefName, .state, .baseRefName'*)
+        match "$STATE" "$HEAD" | while IFS="$TAB" read -r h s b n; do
+            printf '%s\t%s\t%s\n' "$h" "$s" "$b"
+        done ;;
+    *'.[0].baseRefName'*)
+        match "$STATE" "$HEAD" | while IFS="$TAB" read -r h s b n; do
+            printf '%s\n' "$b"; break
+        done ;;
+    *'.[0].number'*)
+        match "$STATE" "$HEAD" | while IFS="$TAB" read -r h s b n; do
+            printf '%s\n' "$n"; break
+        done ;;
+    *) die "pr list --json $JSON --jq $JQ" ;;
+esac
