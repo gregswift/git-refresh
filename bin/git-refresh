@@ -362,6 +362,29 @@ report_unpushed() {
     esac
 }
 
+# --please can publish the branch further down the same iteration, and a push
+# that leaves origin holding exactly this branch has resolved the divergence.
+# Reporting it then would send you to --doctor for `git pull --rebase`, which
+# undoes what the run just published.
+#
+# Every path a branch leaves by has to call this, or a divergence goes
+# unreported: a dry run never pushes, and a conflicting rebase never gets as far
+# as one.
+flush_divergence() {  # $1 = worktree, $2 = branch
+    [ "$DIVPENDING" -eq 1 ] || return 0
+    DIVPENDING=0
+    if [ "${BUCKET:-}" = pushed ] \
+       && [ "$(git -C "$1" rev-parse HEAD)" \
+          = "$(git -C "$1" rev-parse "origin/$2" 2>/dev/null)" ]; then
+        DIVNOTE=""
+        return 0
+    fi
+    printf '%s\t%s\t%s\n' "$2" \
+        "has commits of its own that origin/$2 lacks, and was rewritten underneath them" \
+        "cd $1 && git pull --rebase" >>"$NEEDS"
+    N_DIVERGED=$((N_DIVERGED + 1))
+}
+
 # A branch can be more than one thing at once, and the row has one column and
 # one icon to say so, so an extra only ever raises how the cell reads: a pushed
 # branch that is also diverged from origin is a diverged branch.
@@ -780,7 +803,7 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
     # already landed, against a base that already contains it, which is a
     # conflict per file for no reason. Adopting the remote first avoids all of
     # it -- but only when this branch holds nothing the remote lacks.
-    SYNCNOTE=""; DIVNOTE=""; STASHNOTE=""; SYNCED=0
+    SYNCNOTE=""; DIVNOTE=""; STASHNOTE=""; SYNCED=0; DIVPENDING=0; BUCKET=
     if [ "$SYNC" -eq 1 ] \
        && git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null \
        && [ "$(git -C "$DIR" rev-parse HEAD)" != "$(git -C "$DIR" rev-parse "origin/$BRANCH")" ]; then
@@ -803,13 +826,11 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
             # Real local work under a rewritten remote. Which side wins is a
             # judgement about intent, so it is reported and left alone.
             SYNCKIND=""
-            # Stated here, so the run names the problem; --doctor is where the
-            # decision about it gets recommended.
+            # Held, not reported. --please may publish this branch further down
+            # the same iteration, which is the one thing that can make the
+            # statement false, so the verdict waits until the push is known.
             DIVNOTE="diverged from origin"
-            printf '%s\t%s\t%s\n' "$BRANCH" \
-                "has commits of its own that origin/$BRANCH lacks, and was rewritten underneath them" \
-                "cd $DIR && git pull --rebase" >>"$NEEDS"
-            N_DIVERGED=$((N_DIVERGED + 1))
+            DIVPENDING=1
         fi
 
         if [ -n "$SYNCKIND" ] && [ "$DRY_RUN" -eq 1 ]; then
@@ -871,6 +892,7 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
             N_WOULD=$((N_WOULD + 1))
         fi
         report_unpushed
+        flush_divergence "$DIR" "$BRANCH"
         continue
     fi
 
@@ -934,6 +956,8 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
                 [ "$VERBOSE" -eq 1 ] && cat "$PUSHOUT"
             fi
         fi
+
+        flush_divergence "$DIR" "$BRANCH"
 
         # The header promises a count of worktrees, so the buckets have to
         # partition them: one branch, one bucket, chosen once nothing else can
@@ -1001,6 +1025,7 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
                     "$SAMPLE" >>"$NEEDS"
             fi
         fi
+        flush_divergence "$DIR" "$BRANCH"
         N_CONFLICT=$((N_CONFLICT + 1))
         [ "$VERBOSE" -eq 1 ] && cat "$OUT"
     fi
