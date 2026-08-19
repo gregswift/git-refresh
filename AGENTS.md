@@ -1,7 +1,8 @@
 # AGENTS.md
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) first. It is the rulebook. This file
-lists only what an agent gets wrong.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and submit, and
+[STYLE.md](STYLE.md) for how the code is written. This file lists only what an
+agent gets wrong.
 
 ## Before proposing a change
 
@@ -20,7 +21,7 @@ lists only what an agent gets wrong.
 A comment should be as short as it can be and still say what is necessary.
 Going past that point is the failure: the reasoning survives and the thing
 being reasoned about is lost. Where a comment adds nothing, delete it rather
-than trim it. The Comments section of CONTRIBUTING.md has the rules.
+than trim it. [STYLE.md](STYLE.md) has the rules.
 
 ## These scripts are destructive
 
