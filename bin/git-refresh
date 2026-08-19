@@ -1127,9 +1127,21 @@ if [ "$PRUNE" -eq 1 ]; then
             continue
         fi
 
+        # `git worktree prune` is repository-wide: it clears the record of every
+        # prunable worktree at once, including the ones this run deliberately
+        # left alone, so an unmerged branch loses its record anyway and the
+        # `git worktree remove` suggested for it no longer has anything to act
+        # on. Removing this worktree by path touches only this one, and works
+        # whether or not the directory is still there.
+        REMOVED=0
         if [ "$MISSING" -eq 1 ]; then
-            git worktree prune
-        elif ! git worktree remove "$DIR" 2>/dev/null; then
+            # A directory that is already gone has nothing left to lose, and
+            # --force is what git wants for a worktree it cannot find.
+            git worktree remove --force "$DIR" 2>/dev/null && REMOVED=1
+        else
+            git worktree remove "$DIR" 2>/dev/null && REMOVED=1
+        fi
+        if [ "$REMOVED" -eq 0 ]; then
             printf '%s\n' "$(paint warn "$BRANCH: worktree remove failed, branch left alone")" >&2
             printf '%s\t%s\t%s\n' "$BRANCH" \
                 "worktree could not be removed" \
