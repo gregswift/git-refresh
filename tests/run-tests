@@ -1,0 +1,67 @@
+#!/bin/sh
+#
+# tests/run-tests [name-filter]
+#
+# Every case runs against a fresh throwaway repository, with a stubbed gh and
+# none of your git config in scope. Nothing here touches the repository it is
+# run from, and nothing reaches the network.
+#
+# Exit status is 1 if any assertion failed.
+
+set -eu
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(dirname "$HERE")
+
+command -v git >/dev/null 2>&1 || { echo "git not found in PATH" >&2; exit 2; }
+
+# The scripts under test, and the gh stub, ahead of anything installed.
+PATH="$ROOT/bin:$HERE/stubs:$PATH"
+export PATH
+
+# A dashed external is found by git before its aliases, so `git refresh` inside
+# a case runs $ROOT/bin/git-refresh. Guard that, because a stale copy on PATH
+# would make the whole suite a test of the wrong file.
+WHICH=$(command -v git-refresh)
+[ "$WHICH" = "$ROOT/bin/git-refresh" ] || {
+    printf 'refusing to run: git-refresh resolves to %s, not %s\n' "$WHICH" "$ROOT/bin/git-refresh" >&2
+    exit 2
+}
+
+. "$HERE/lib.sh"
+
+FILTER=${1:-}
+TMPROOT=$(mktemp -d) || exit 2
+trap 'rm -rf "$TMPROOT"' EXIT INT TERM
+RESULTS="$TMPROOT/results"
+: >"$RESULTS"
+export RESULTS
+
+for f in "$HERE"/cases/*.sh; do
+    [ -f "$f" ] || continue
+    CASE=$(basename "$f" .sh)
+    case "$CASE" in
+        *"$FILTER"*) ;;
+        *) continue ;;
+    esac
+    printf '\n%s\n' "$CASE"
+    WORK="$TMPROOT/$CASE"
+    mkdir -p "$WORK"
+    # Each case in a subshell: one that exits early cannot take the run with it.
+    # $? after `if !` is the status of the negation, not of the case.
+    ( set -eu; . "$f" ) || _rc=$?
+    if [ "${_rc:-0}" -ne 0 ]; then
+        printf '    FAIL %s (case aborted, exit %s)\n' "$CASE" "$_rc"
+        printf 'FAIL\t%s\tcase aborted, exit %s\n' "$CASE" "$_rc" >>"$RESULTS"
+    fi
+    _rc=0
+done
+
+PASS=$(grep -c '^ok'   "$RESULTS" || true)
+FAIL=$(grep -c '^FAIL' "$RESULTS" || true)
+printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
+if [ "$FAIL" -gt 0 ]; then
+    printf 'failures:\n'
+    grep '^FAIL' "$RESULTS" | cut -f2,3 | sed 's/^/  /;s/\t/: /'
+fi
+[ "$FAIL" -eq 0 ]
