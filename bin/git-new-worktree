@@ -138,10 +138,6 @@ if [ "$(git config --get core.bare || echo false)" != "true" ]; then
             || printf '     ... and %s more\n' "$((LEFTOVER - 5))" >&2
         printf '\n' >&2
 
-        # Ignored paths are the half that surprises people: git status does not
-        # show them, so the checkout reads as clean while the conversion refuses.
-        # Saying so every time would put the explanation in front of people whose
-        # problem is an uncommitted edit, who will then skim it when it matters.
         if printf '%s\n' "$LEFTOVER_LIST" | grep -q '^!!'; then
             printf '   Ignored paths are considered but not shown by plain git status, causing\n' >&2
             printf '   a checkout that looks clean but still stops the conversion. Conversion\n' >&2
@@ -284,8 +280,7 @@ elif git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null; th
 else
     # Branching from origin/<default> would otherwise leave that as the new
     # branch's upstream, which is the wrong branch: every branch here wants
-    # origin/<its own name>, set by the first `git push -u`. What a wrong
-    # upstream costs depends on push.default, so do not leave one behind.
+    # origin/<its own name>, set by the first `git push -u`.
     git worktree add --no-track -b "$BRANCH" "$DIR" "$BASE" >&2
     # The moment the base is known for certain. Without it a branch has no base
     # until its PR exists, and `git refresh --all` has nothing to rebase it onto.
