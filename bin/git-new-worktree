@@ -24,6 +24,8 @@ PROG=$(basename "$0")
 BRANCH=""
 BASE_ARG=""
 FORCE=0
+# Empty so config can fill it in and --no-normalize still wins.
+NORMALIZE=""
 
 usage() {
     cat <<EOF
@@ -42,7 +44,20 @@ A plain clone has no sibling worktrees to add to. You are offered a conversion
 to the layout, which requires a pristine checkout: no changes, nothing
 untracked, nothing ignored.
 
+The directory is named for the branch. A branch name containing a `/` would
+nest, which the layout does not want, so it can be flattened first:
+
+  git config refresh.normalizeWorktreeNames true
+
+    gwt abc/add-search-filter   ->  <repo>/abc_add-search-filter/
+
+The branch itself is untouched. Set refresh.normalizeReplacement to use
+something other than `_`.
+
 Options:
+  --normalize, --no-normalize
+               Flatten the directory name, or do not. Overrides
+               refresh.normalizeWorktreeNames for one run.
   -f, --force  Convert without asking.
   -h, --help   This text.
 EOF
@@ -52,6 +67,8 @@ die() { printf '❌ %s\n' "$*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --normalize)    NORMALIZE=1 ;;
+        --no-normalize) NORMALIZE=0 ;;
         -f|--force) FORCE=1 ;;
         -h|--help)  usage; exit 0 ;;
         --)         shift; break ;;
@@ -69,6 +86,23 @@ shift
 
 command -v git >/dev/null 2>&1 || die "git not found in PATH"
 git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
+
+# A typo should be an error, not a silently disabled setting.
+config_bool() {  # $1 = key
+    if _v=$(git config --type=bool --get "$1" 2>/dev/null); then _rc=0; else _rc=$?; fi
+    case "$_rc" in
+        0) [ "$_v" = "true" ] && printf 1 || printf 0 ;;
+        1) printf 0 ;;
+        *) die "$1 in git config is not a boolean: $(git config --get "$1" 2>/dev/null)" ;;
+    esac
+}
+
+# A `/` in a branch name would nest the worktree; the branch keeps its own name.
+# Replaces what a ref may hold and a filename may not; check-ref-format has the
+# rest already.
+normalize_name() {  # $1 = branch
+    printf '%s' "$1" | tr '/\\:*?"<>|' "$REPLACEMENT$REPLACEMENT$REPLACEMENT$REPLACEMENT$REPLACEMENT$REPLACEMENT$REPLACEMENT$REPLACEMENT$REPLACEMENT"
+}
 
 TOP=$(git rev-parse --show-toplevel 2>/dev/null) || TOP=""
 [ -n "$TOP" ] || die "no working tree here; run this from inside one of the worktrees"
@@ -120,18 +154,47 @@ if [ "$(git config --get core.bare || echo false)" != "true" ]; then
     printf '🔧 converted; %s is now at %s/%s\n' "$CUR" "$TOP" "$CUR" >&2
 fi
 
-DIR="$WT_BASE_DIR/$BRANCH"
+[ -n "$NORMALIZE" ] || NORMALIZE=$(config_bool refresh.normalizeWorktreeNames)
+REPLACEMENT=$(git config --get refresh.normalizeReplacement 2>/dev/null || printf '_')
+case "$REPLACEMENT" in
+    ?) ;;
+    *) die "refresh.normalizeReplacement must be a single character, got '$REPLACEMENT'" ;;
+esac
 
-# Already laid down. Whoever typed `gwt <branch>` wants to be in it, and there
-# is nothing to create, so hand back the path before the fetch rather than
-# refusing over a worktree that is exactly what was asked for.
+if [ "$NORMALIZE" -eq 1 ]; then
+    DIRNAME=$(normalize_name "$BRANCH")
+else
+    DIRNAME=$BRANCH
+fi
+
+DIR="$WT_BASE_DIR/$DIRNAME"
+
 if [ -e "$DIR" ]; then
-    HERE=$(git -C "$DIR" branch --show-current 2>/dev/null) || HERE=""
-    [ "$HERE" = "$BRANCH" ] \
-        || die "$DIR already exists and is not a worktree for $BRANCH"
-    printf '📂 %s already checked out at %s\n' "$BRANCH" "$DIR" >&2
-    printf '%s\n' "$DIR"
-    exit 0
+    # Asked from a plain directory, git answers about the nearest ancestor
+    # worktree, so compare toplevels. Resolved, because git reports them that
+    # way.
+    HERE=""
+    WANT=$(cd "$DIR" 2>/dev/null && pwd -P) || WANT=""
+    TOPHERE=$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null) || TOPHERE=""
+    [ -z "$TOPHERE" ] || TOPHERE=$(cd "$TOPHERE" 2>/dev/null && pwd -P)
+    if [ -n "$WANT" ] && [ "$WANT" = "$TOPHERE" ]; then
+        HERE=$(git -C "$DIR" branch --show-current 2>/dev/null) || HERE=""
+    fi
+    if [ "$HERE" = "$BRANCH" ]; then
+        # Nothing to create, so hand the path back before the fetch.
+        printf '📂 %s already checked out at %s\n' "$BRANCH" "$DIR" >&2
+        printf '%s\n' "$DIR"
+        exit 0
+    elif [ -n "$HERE" ]; then
+        # `a/b` and `a_b` both want `a_b`. Handing back the other branch's
+        # worktree would put you on the wrong branch, so name it and stop.
+        if [ "$DIRNAME" != "$BRANCH" ] || [ "$HERE" != "$DIRNAME" ]; then
+            die "$DIR holds $HERE, not $BRANCH; the two names collide once flattened"
+        fi
+        die "$DIR holds $HERE, not $BRANCH"
+    else
+        die "$DIR already exists and is not a worktree"
+    fi
 fi
 
 has_remote() { git remote | grep -x "$1" >/dev/null 2>&1; }

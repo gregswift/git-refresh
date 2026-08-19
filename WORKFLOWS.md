@@ -74,6 +74,20 @@ Creating a branch this way records what it was branched from:
 
 That line is what lets `git refresh` do the right thing before a pull request exists. See **Where the base comes from**. `man git-new-worktree` covers the rest.
 
+### Branch names with a slash in them
+
+`abc/add-search-filter` would nest, because the directory is named for the branch and the layout wants one level. Flattening is opt-in:
+
+    git config refresh.normalizeWorktreeNames true
+
+    gwt abc/add-search-filter    ->  myrepo/abc_add-search-filter/
+
+The branch itself is untouched, so `git refresh` and everything else still see `abc/add-search-filter`. `refresh.normalizeReplacement` picks a character other than `_`, and `--normalize` / `--no-normalize` override the setting for one run.
+
+Two branches **can** flatten onto one directory: `a/b` and `a_b` both want `a_b`. That refuses, naming the branch already there, rather than handing back a worktree for the wrong branch.
+
+Turning this on does not move worktrees that already exist, so a repository can hold both shapes.
+
 New branches are created with `--no-track`, deliberately. Branching from `origin/main` would otherwise leave `origin/main` as the new branch's upstream, and every branch here wants `origin/<its own name>`. What a wrong upstream costs depends on `push.default`, so none is left behind.
 
 ## Converting a clone you already have

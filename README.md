@@ -82,6 +82,14 @@ Already have a plain clone? `git new-worktree <branch>` inside it offers to conv
 
 It does not remove worktrees unless asked. `--prune` should stay opt-in: it is the one that runs `git worktree remove` and deletes the branch.
 
+A branch name with a `/` in it nests, because the directory is named for the branch. If your team names branches `initials/feature` or `TICKET/feature` and you don't want the nested directories, you can flatten them:
+
+    git config refresh.normalizeWorktreeNames true
+
+    gwt abc/add-search-filter    ->  myrepo/abc_add-search-filter/
+
+The branch keeps its own name. Off by default, because turning it on does not move worktrees that already exist.
+
 ## Requirements
 
 * git 2.23 or newer, for `git branch --show-current`.

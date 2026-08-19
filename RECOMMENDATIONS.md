@@ -133,6 +133,8 @@ Unlike everything above, these only affect `git-refresh`.
 | `refresh.syncStale` | **on** | Adopt `origin/<branch>` where this copy was rewritten elsewhere and holds nothing origin lacks. Same as `--sync`; `--no-sync` for one run. |
 | `refresh.pruneWorktrees` | **off** | Remove worktrees whose branch is gone from origin and was merged. Same as `--prune`. Opt-in, because it deletes things. |
 | `refresh.icons` | **on** | Emoji in the status column and the messages. `--icons` / `--no-icons` for one run. |
+| `refresh.normalizeWorktreeNames` | **off** | Flatten a `/` out of the directory name a worktree gets, so a branch like `abc/feature` does not nest. Read by `git new-worktree`. `--normalize` / `--no-normalize` for one run. |
+| `refresh.normalizeReplacement` | `_` | The single character a flattened name uses in place of `/`. |
 | `color.refresh` | `auto` | `auto`, `always` or `never`. `auto` means a terminal, with no `NO_COLOR` set. |
 
 Three more it reads but does not own:
