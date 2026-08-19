@@ -13,6 +13,10 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-24.04
+    # A wedged apt held a runner for fifty minutes and blocked a release. The
+    # whole job is under four minutes when it works, so ten is generous and
+    # still turns a hang into a failure someone can see.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7.0.1
 
