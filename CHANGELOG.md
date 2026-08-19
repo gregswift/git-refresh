@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.3](https://github.com/gregswift/git-refresh/compare/v1.1.2...v1.1.3) (2026-08-19)
+
+
+### Fixes
+
+* **refresh:** name the branches instead of suggesting a flag --all refuses ([708af59](https://github.com/gregswift/git-refresh/commit/708af599db96a1d9bf83b59d1d2a0c4d52c72dfc)), closes [#12](https://github.com/gregswift/git-refresh/issues/12)
+
 ## [1.1.2](https://github.com/gregswift/git-refresh/compare/v1.1.1...v1.1.2) (2026-08-19)
 
 
