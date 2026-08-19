@@ -1175,8 +1175,16 @@ if [ "$ALL" -eq 0 ]; then
     [ -z "$SINGLE_STASH_DIR" ] || stash_advice "$SINGLE_STASH_DIR"
 elif [ "$ATTENTION" -gt 0 ] && [ "$DOCTOR" -eq 0 ]; then
     [ "$ATTENTION" -eq 1 ] && NEEDS_VERB=needs || NEEDS_VERB=need
-    printf '\n%s%s %s you; run again with --doctor to see what to do%s\n' \
-        "$C_HEAD" "$ATTENTION" "$NEEDS_VERB" "$C_OFF"
+    # --doctor diagnoses the branch you are standing in and refuses --all, so
+    # "run again with --doctor" is advice this run cannot take. Name the
+    # branches instead, and say where the command has to be run.
+    ATTN_LIST=$( { cut -f1 "$NEEDS"; cut -f1 "$NOBASE"; } 2>/dev/null \
+        | sort -u | grep . | head -5 | paste -sd, - | sed 's/,/, /g')
+    [ "$ATTENTION" -le 5 ] || ATTN_LIST="$ATTN_LIST and $((ATTENTION - 5)) more"
+    printf '\n%s%s %s you: %s%s\n' \
+        "$C_HEAD" "$ATTENTION" "$NEEDS_VERB" "$ATTN_LIST" "$C_OFF"
+    printf '%srun git refresh --doctor in one of their worktrees to see what to do%s\n' \
+        "$C_HEAD" "$C_OFF"
 fi
 
 # ---- --doctor --------------------------------------------------------------
