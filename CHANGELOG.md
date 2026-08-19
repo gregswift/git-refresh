@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.6](https://github.com/gregswift/git-refresh/compare/v1.1.5...v1.1.6) (2026-08-19)
+
+
+### Documentation
+
+* add CONTRIBUTING.md ([15c1dea](https://github.com/gregswift/git-refresh/commit/15c1dea481e9844c01b9df4d708e6557c66aa42d))
+* write down the comment style ([782e19c](https://github.com/gregswift/git-refresh/commit/782e19ce73917f48b9578e51cc1097395440aba6))
+
 ## [1.1.5](https://github.com/gregswift/git-refresh/compare/v1.1.4...v1.1.5) (2026-08-19)
 
 
