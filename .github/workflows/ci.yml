@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Nothing here writes anything; release-please is the workflow that needs write
+# access, and it is a separate file for that reason.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: git version under test
+        run: git --version
+
+      # The Makefile owns what the checks need and what they are. CI calls two
+      # targets and knows nothing else about this repository.
+      - run: make setup
+      - run: make check
+
+  # The release path runs once a release, which is a poor time to discover that
+  # a key was rotated, an installation was removed, or a repository was dropped
+  # from its scope. This proves the credentials on every pull request instead.
+  # It cannot prove the write permissions, which are only exercised for real at
+  # release time; it proves the client id, the key, and the installation scope.
+  release-credentials:
+    if: vars.RELEASE_APP_CLIENT_ID != ''
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/create-github-app-token@v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            git-refresh
+            homebrew-tap
+
+      - name: Both repositories are in scope
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          gh api /installation/repositories --jq '.repositories[].full_name' | sort | tee reachable.txt
+          for r in git-refresh homebrew-tap; do
+              grep -qx "$OWNER/$r" reachable.txt || {
+                  echo "::error::the app token cannot reach $OWNER/$r"
+                  exit 1
+              }
+          done
+          echo "app is $(gh api /installation/repositories --jq '.repositories | length') repositories wide, both required ones present"
+
+  # Matches the self-ci pattern in swiftaspect/gha-workflows: the workflows are
+  # code too, and a typo in one is only found by running it otherwise. Pinned to
+  # a commit rather than a tag, since a third party tag can be moved.
+  actionlint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
+        with:
+          files: ".github/workflows/*.yml"
