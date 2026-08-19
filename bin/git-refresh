@@ -549,7 +549,7 @@ infer_base() {  # $1 = worktree dir, $2 = branch
     _best=$DEFAULT
     _dist=$(git -C "$1" rev-list --count \
         "$(git -C "$1" merge-base "$DEFAULT" "$2" 2>/dev/null)..$2" 2>/dev/null) || _dist=""
-    _xsha=$(git -C "$1" rev-parse "$2")
+    _xsha=$(git -C "$1" rev-parse "$2" 2>/dev/null)
     while IFS="$TAB" read -r _cand _cdir; do
         [ -n "${_cdir:-}" ] || continue
         [ "$_cand" != "$2" ] && [ "$_cand" != "-" ] && [ "$_cand" != "$DEFAULT" ] || continue
@@ -613,6 +613,14 @@ resolve_base() {  # $1 = branch, $2 = worktree; prints "<base><TAB><why>", or no
 : >"$PLAN"
 while IFS="$TAB" read -r BRANCH DIR; do
     [ -n "${DIR:-}" ] || continue
+    # A worktree whose directory is gone has no base question to answer: the run
+    # either removes the record or says why it will not. Asking anyway walks
+    # infer_base into a directory that is not there, and files the branch as
+    # needing attention when nothing does.
+    if [ ! -d "$DIR" ]; then
+        printf '%s\t%s\t-\t%s\n' "$BRANCH" "$DIR" "worktree gone" >>"$PLAN"
+        continue
+    fi
     if [ -n "$BASE_ARG" ]; then
         printf '%s\t%s\t%s\t%s\n' "$BRANCH" "$DIR" "$BASE_ARG" "given" >>"$PLAN"
         continue
