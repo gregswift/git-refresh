@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/gregswift/git-refresh/compare/v1.0.1...v1.1.0) (2026-08-19)
+
+
+### Features
+
+* **new-worktree:** flatten a slash out of the directory name, on request ([c63a73c](https://github.com/gregswift/git-refresh/commit/c63a73cc6ede2b2e33140ae4a9207bc8488c27c0)), closes [#3](https://github.com/gregswift/git-refresh/issues/3)
+
 ## [1.0.1](https://github.com/gregswift/git-refresh/compare/v1.0.0...v1.0.1) (2026-08-19)
 
 
