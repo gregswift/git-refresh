@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.4](https://github.com/gregswift/git-refresh/compare/v1.1.3...v1.1.4) (2026-08-19)
+
+
+### Fixes
+
+* **new-worktree:** show what the conversion refusal counted, and why ([1882d55](https://github.com/gregswift/git-refresh/commit/1882d55f3ab19070f27d1cb7a0be7ca4e6ce92e8)), closes [#17](https://github.com/gregswift/git-refresh/issues/17)
+
 ## [1.1.3](https://github.com/gregswift/git-refresh/compare/v1.1.2...v1.1.3) (2026-08-19)
 
 
