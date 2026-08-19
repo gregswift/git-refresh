@@ -33,3 +33,8 @@ git -C "$a" commit -qa --amend --no-edit
 one=$(git -C "$a" refresh --no-please --no-icons 2>&1) || true
 assert_contains "the single-branch wording is unchanged" "run again with --doctor" "$one"
 assert_absent   "and it does not name branches there"    "need you"                 "$one"
+
+printf 'edited\n' >> "$b/file-b"
+git -C "$a" checkout -q -- . 2>/dev/null || true
+solo=$(git -C "$REPO/main" refresh --all --no-icons 2>&1) || true
+assert_contains "a single branch reads singular" "in its worktree" "$solo"

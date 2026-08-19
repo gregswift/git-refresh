@@ -1203,8 +1203,9 @@ elif [ "$ATTENTION" -gt 0 ] && [ "$DOCTOR" -eq 0 ]; then
     [ "$ATTENTION" -le 5 ] || ATTN_LIST="$ATTN_LIST and $((ATTENTION - 5)) more"
     printf '\n%s%s %s you: %s%s\n' \
         "$C_HEAD" "$ATTENTION" "$NEEDS_VERB" "$ATTN_LIST" "$C_OFF"
-    printf '%srun git refresh --doctor in one of their worktrees to see what to do%s\n' \
-        "$C_HEAD" "$C_OFF"
+    [ "$ATTENTION" -eq 1 ] && WHERE="in its worktree" || WHERE="in one of their worktrees"
+    printf '%srun git refresh --doctor %s to see what to do%s\n' \
+        "$C_HEAD" "$WHERE" "$C_OFF"
 fi
 
 # ---- --doctor --------------------------------------------------------------
