@@ -20,7 +20,7 @@ SHARE = shell/gwt.sh git/refresh.gitconfig
 DOCS  = README.md WORKFLOWS.md RECOMMENDATIONS.md TROUBLESHOOTING.md LICENSE
 MANS  = git-refresh.1 git-new-worktree.1 git-clone-for-worktrees.1
 
-.PHONY: all help setup install uninstall check lint-shell lint-man clean
+.PHONY: all help setup install uninstall check lint lint-shell lint-man test clean
 
 all: help
 
@@ -51,16 +51,25 @@ uninstall: ## Remove everything install put down
 	for m in $(MANS); do rm -f $(MANDIR)/$$m; done
 	rm -rf $(SHAREDIR) $(DOCDIR)
 
-check: lint-shell lint-man ## Aggregate gate: everything that has to pass
+# The one target CI calls. Composed of the others rather than repeating what
+# they do, so running a piece by hand runs the same thing CI ran.
+check: lint test ## Aggregate gate: syntax, man pages, behaviour (CI's entry point)
+
+lint: lint-shell lint-man ## Every static check
 
 lint-shell: ## Parse every shell script without running it
 	@for b in $(BINS); do sh -n bin/$$b && echo "ok  bin/$$b"; done
 	@sh -n shell/gwt.sh && echo "ok  shell/gwt.sh"
+	@for f in tests/run-tests tests/lib.sh tests/stubs/gh tests/cases/*.sh; do \
+		sh -n $$f && echo "ok  $$f"; done
 
 lint-man: ## Lint the man pages
 	@command -v mandoc >/dev/null 2>&1 || { \
 		echo "mandoc not found; run make setup" >&2; exit 1; }
 	@mandoc -T lint man/*.1 && echo "ok  man pages"
+
+test: ## Run the behavioural suite
+	@tests/run-tests
 
 clean:
 	@:
