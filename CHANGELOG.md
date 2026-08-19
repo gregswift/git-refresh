@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.7](https://github.com/gregswift/git-refresh/compare/v1.1.6...v1.1.7) (2026-08-19)
+
+
+### Documentation
+
+* add AGENTS.md ([25774a0](https://github.com/gregswift/git-refresh/commit/25774a00f5825a58300d080e883bbe5e5d7e0566))
+* give STYLE.md the shell, output and test conventions ([76067da](https://github.com/gregswift/git-refresh/commit/76067da18101f9173958292ac2d3e06032f2c84e))
+* move the comment style into STYLE.md ([df523ab](https://github.com/gregswift/git-refresh/commit/df523abbe9b3e010702d69067f336d87202856d8))
+
 ## [1.1.6](https://github.com/gregswift/git-refresh/compare/v1.1.5...v1.1.6) (2026-08-19)
 
 
