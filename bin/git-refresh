@@ -28,9 +28,8 @@
 
 set -eu
 
-# `git refresh` (a dashed external) and any alias path reach a script
-# differently: the alias path exports GIT_DIR pointing at whichever worktree git
-# was invoked from, which would silently retarget every git call below.
+# When invoked as git subcommand several GIT_* environment variables
+# would silently retarget every git call below with unintended consequences
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 
 PROG=$(basename "$0")
@@ -113,10 +112,6 @@ Exit status is 1 if any rebase conflicted or any push was refused.
 EOF
 }
 
-# Icons and colour are independent, and either alone still carries severity:
-# with both off the words do it. Every icon holds its own trailing space, so
-# switching them off leaves no orphan indent behind. Emoji are double width in
-# most terminals, hence the two spaces on the ones that need them.
 set_palette() {  # $1 = icons on, $2 = colour on
     if [ "$1" -eq 1 ]; then
         I_OK="✅ ";  I_BAD="❌ ";   I_WARN="⚠️  "; I_SKIP="⏭️  "; I_NONE="➖ "
@@ -138,9 +133,6 @@ set_palette() {  # $1 = icons on, $2 = colour on
 # What the messages below the argument loop use, until config has been read.
 set_palette 1 0
 
-# Severity picks both the icon and the colour, so a row says the same thing
-# whichever of the two is switched off. A third argument replaces the icon for
-# the messages that name their own action rather than an outcome.
 paint() {  # $1 = severity, $2 = text, $3 = icon to use instead
     case "$1" in
         ok)    _icon=$I_OK;   _col=$C_OK ;;
@@ -255,9 +247,10 @@ if [ "$DOCTOR" -eq 1 ]; then
 fi
 
 # A stack is anchored on the branch you are standing in, and from there it is
-# every worktree reachable through PR bases, upwards as well as down. The
-# branches above are the ones a rebase here strands, so they are the ones most
-# in need of coming along.
+# every worktree reachable through PR bases, upwards as well as down. Upwards is
+# the half that matters: a branch whose PR base is this one is built on the very
+# commits this rebase rewrites, so once it runs that branch is sitting on shas
+# nothing points at any more. It has to come along or it is stranded.
 if [ "$STACK" -eq 1 ]; then
     [ "$ALL" -eq 0 ] || die "--stack and --all name different sets; pick one"
     [ "$(git rev-parse --is-inside-work-tree 2>/dev/null || echo false)" = "true" ] \
@@ -319,9 +312,8 @@ list_worktrees() {
     '
 }
 
-# icon, branch, base, status. The base column asks the same question on every
-# line, so a branch without one gets "-" rather than a gap. Anything this run is
-# not acting on belongs to --doctor and not here.
+# A branch without a base gets "-" rather than an empty column.
+# Anything this run is not acting on belongs to --doctor.
 BRANCH_W=24
 BASE_W=16
 # Work of this branch's own that origin does not have. Counted by patch and
@@ -362,10 +354,13 @@ report_unpushed() {
     esac
 }
 
-# --please can publish the branch further down the same iteration, and a push
-# that leaves origin holding exactly this branch has resolved the divergence.
-# Reporting it then would send you to --doctor for `git pull --rebase`, which
-# undoes what the run just published.
+# A divergence is found early and settled here, at the end of the branch's turn,
+# because --please may publish the branch in between: a push that leaves origin
+# holding exactly this branch has resolved it, and reporting it anyway would
+# send you to --doctor for `git pull --rebase`, undoing what was just published.
+#
+# Without --please nothing can resolve it, so it is always reported. That is the
+# common case, not the exception.
 #
 # Every path a branch leaves by has to call this, or a divergence goes
 # unreported: a dry run never pushes, and a conflicting rebase never gets as far

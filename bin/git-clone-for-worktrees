@@ -57,9 +57,7 @@ done
 
 command -v git >/dev/null 2>&1 || die "git not found in PATH"
 
-# owner/name is the common case and gets an ssh URL. A scheme, an scp-style
-# host, or a filesystem path is already something git can clone, so it is passed
-# through untouched.
+# Process owner/name into a ssh URI, and accept any native source as provided
 is_owner_name() {
     case "$1" in
         *://*|*@*:*|/*|./*|../*|~/*) return 1 ;;
@@ -98,9 +96,9 @@ printf '🚀 Cloning %s\n' "$(url_of "$REPO_SPEC")"
 mkdir -p "$REPO_DIR"
 git clone --bare "$(url_of "$REPO_SPEC")" "$GITDIR"
 
-# A bare clone leaves remote.origin.fetch unset, so refs/remotes/origin/* stays
-# empty and every later fetch brings back nothing. The worktrees need those refs
-# to track against, so give origin the refspec a normal clone would have.
+# Give origin the refspec a normal clone would have. A bare clone leaves
+# remote.origin.fetch unset, so refs/remotes/origin/* stays empty and every
+# later fetch brings back nothing for the worktrees to track against.
 git -C "$GITDIR" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
 git -C "$GITDIR" fetch --prune origin
 
