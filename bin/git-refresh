@@ -1,0 +1,1211 @@
+#!/bin/sh
+#
+# git-refresh -- fetch, sync the fork, and rebase onto the right base.
+#
+# Reachable as `git refresh` as well as by its own name: git looks for a
+# `git-refresh` in PATH before it consults aliases, so no alias is needed.
+#
+# One branch by default, the one you are standing in. --all does every worktree,
+# and is assumed at the bare repository root, where there is no branch to mean.
+# Single-branch mode never looks at the worktree layout, so an ordinary clone
+# behaves the same as a worktree checkout.
+#
+# The right base for a branch is the target of its open pull request, not
+# origin/<same-name>: that way a stacked branch lands on the branch below it
+# instead of flattening onto the default branch. Where no PR exists yet the base
+# recorded by git-new-worktree stands in.
+#
+# When an `upstream` remote exists the first step fast-forwards origin's default
+# branch from upstream's, leaving everything after it a plain origin workflow.
+#
+# --all and --stack run every rebase with rerere.enabled=false, whatever your
+# config says. Those rebases are speculative and are thrown away the moment they
+# conflict, so they have no business recording a resolution you never reviewed,
+# and no business replaying one across twenty branches unattended.
+#
+# On a single branch rerere is left exactly as you configured it: you asked for
+# that rebase and you are standing in front of the result.
+
+set -eu
+
+# `git refresh` (a dashed external) and any alias path reach a script
+# differently: the alias path exports GIT_DIR pointing at whichever worktree git
+# was invoked from, which would silently retarget every git call below.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+
+PROG=$(basename "$0")
+ALL=0
+STACK=0
+INTERACTIVE=0
+DRY_RUN=0
+VERBOSE=0
+DOCTOR=0
+BASE_ARG=""
+# Empty until something sets them, so config can fill in what the command line
+# left alone and an explicit --no-... still wins over config.
+PUSH=""
+PRUNE=""
+SYNC=""
+ICONS=""
+COLOR=""
+
+usage() {
+    cat <<EOF
+Usage: git refresh [<base>] [-i] [--all] [-n] [-v] [--please] [--doctor]
+
+Fetches, fast-forwards origin's default branch from upstream's when an
+\`upstream\` remote exists, then rebases onto the base branch of the open pull
+request, falling back to the base recorded when the branch was created.
+
+  <base>  Rebase onto this instead. A bare name is looked up under origin
+          first, so \`git refresh foo\` means origin/foo. One branch only.
+
+Options:
+  --all           Every worktree, in stack order. Assumed at the bare root.
+  --stack         Only the branches stacked with this one, reached through PR
+                  bases in both directions, bottom-up. The branches above are
+                  the ones a rebase here would strand.
+  -i, --interactive
+                  Follow the rebase with an interactive pass. One branch only.
+  -n, --dry-run   Show what would happen. Fetches, and moves nothing else:
+                  no rebase, no push, no worktree removed.
+  -v, --verbose   Also print git's own rebase output.
+                  Note: --all and --stack force rerere.enabled=false, since
+                  their rebases are speculative. One branch honours your config.
+  --push-with-lease, --please
+                  Push each branch this run rebased, refusing any push that
+                  would discard commits you have not seen.
+  --prune         Remove worktrees whose branch is gone from origin and was
+                  merged. Never touches one with changes, one you are standing
+                  in, or one with no sign of having been merged.
+  --sync          Adopt origin/<branch> before rebasing, when this branch was
+                  rewritten elsewhere and holds nothing origin lacks. It is
+                  replayed onto the remote rather than reset onto it, so work
+                  is never lost even where that judgement is wrong. A branch
+                  with commits of its own is reported and left alone.
+  --doctor        Recommend what to do about everything the run reported:
+                  conflicts, branches with no base, worktrees held back from
+                  pruning. Implies --dry-run, so a conflict is predicted
+                  rather than met, and the prediction merges the two tips
+                  where a rebase replays each commit.
+  --icons, --no-icons
+                  Emoji in the status column and the messages, on or off. On
+                  unless refresh.icons says otherwise.
+  --color[=<when>], --no-color
+                  when is auto (a terminal only, and not under NO_COLOR),
+                  always, or never. Colour marks severity in the status
+                  column, so it reads on its own with --no-icons.
+  -h, --help      This text.
+
+--please and --sync are on unless you turn them off; --prune is not, because it
+removes worktrees and deletes their branches. Any of them can be turned off for
+one run with --no-please, --no-sync, --no-prune or --no-icons:
+
+  refresh.pushWithLease     bool, on unless set false. Same as --please.
+  refresh.syncStale         bool, on unless set false. Same as --sync.
+  refresh.pruneWorktrees    bool, off unless set true. Same as --prune.
+  refresh.icons             bool, on unless set false.
+  color.refresh             auto, always or never.
+  rebase.autoStash          git's own. Honoured: uncommitted changes are
+                            stashed for the rebase instead of skipping.
+
+Exit status is 1 if any rebase conflicted or any push was refused.
+EOF
+}
+
+# Icons and colour are independent, and either alone still carries severity:
+# with both off the words do it. Every icon holds its own trailing space, so
+# switching them off leaves no orphan indent behind. Emoji are double width in
+# most terminals, hence the two spaces on the ones that need them.
+set_palette() {  # $1 = icons on, $2 = colour on
+    if [ "$1" -eq 1 ]; then
+        I_OK="✅ ";  I_BAD="❌ ";   I_WARN="⚠️  "; I_SKIP="⏭️  "; I_NONE="➖ "
+        I_UP="⬆️  "; I_SYNC="🔄 "; I_PRUNE="🧹 "; I_DOCTOR="🩺 "; I_EDIT="✏️  "
+        I_DRY="🔎 "
+    else
+        I_OK="";    I_BAD="";     I_WARN="";    I_SKIP="";    I_NONE=""
+        I_UP="";    I_SYNC="";    I_PRUNE="";   I_DOCTOR="";  I_EDIT=""
+        I_DRY=""
+    fi
+    if [ "$2" -eq 1 ]; then
+        C_OK=$(printf '\033[32m');  C_WARN=$(printf '\033[33m')
+        C_BAD=$(printf '\033[31m'); C_HEAD=$(printf '\033[1m')
+        C_OFF=$(printf '\033[0m')
+    else
+        C_OK=""; C_WARN=""; C_BAD=""; C_HEAD=""; C_OFF=""
+    fi
+}
+# What the messages below the argument loop use, until config has been read.
+set_palette 1 0
+
+# Severity picks both the icon and the colour, so a row says the same thing
+# whichever of the two is switched off. A third argument replaces the icon for
+# the messages that name their own action rather than an outcome.
+paint() {  # $1 = severity, $2 = text, $3 = icon to use instead
+    case "$1" in
+        ok)    _icon=$I_OK;   _col=$C_OK ;;
+        warn)  _icon=$I_WARN; _col=$C_WARN ;;
+        bad)   _icon=$I_BAD;  _col=$C_BAD ;;
+        skip)  _icon=$I_SKIP; _col=$C_WARN ;;
+        plain) _icon=$I_NONE; _col="" ;;
+        *)     _icon="";      _col="" ;;
+    esac
+    [ $# -lt 3 ] || _icon=$3
+    printf '%s%s%s%s' "$_col" "$_icon" "$2" "${_col:+$C_OFF}"
+}
+
+die() { printf '%s\n' "$(paint bad "$*")" >&2; exit 1; }
+
+# A rebase in progress leaves a detached HEAD, so say which of the two this is.
+# Reporting "check out a branch" to someone mid-rebase sends them the wrong way.
+no_branch_here() {  # $1 = worktree dir
+    _gd=$(git -C "$1" rev-parse --git-path rebase-merge 2>/dev/null)
+    _ga=$(git -C "$1" rev-parse --git-path rebase-apply 2>/dev/null)
+    if [ -d "$_gd" ] || [ -d "$_ga" ]; then
+        die "a rebase is already in progress here: finish it with git rebase --continue, or throw it away with git rebase --abort"
+    fi
+    die "detached HEAD; check out a branch first"
+}
+
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --all)        ALL=1 ;;
+        --stack)      STACK=1 ;;
+        -i|--interactive) INTERACTIVE=1 ;;
+        -n|--dry-run) DRY_RUN=1 ;;
+        -v|--verbose) VERBOSE=1 ;;
+        --push-with-lease|--please) PUSH=1 ;;
+        --no-push-with-lease|--no-please) PUSH=0 ;;
+        --prune)      PRUNE=1 ;;
+        --no-prune)   PRUNE=0 ;;
+        --sync)       SYNC=1 ;;
+        --no-sync)    SYNC=0 ;;
+        --doctor)     DOCTOR=1 ;;
+        --icons)      ICONS=1 ;;
+        --no-icons)   ICONS=0 ;;
+        --color)      COLOR=always ;;
+        --color=*)    COLOR=${1#--color=} ;;
+        --no-color)   COLOR=never ;;
+        -h|--help)    usage; exit 0 ;;
+        --)           shift; break ;;
+        -*)           printf '%s: unknown option: %s\n' "$PROG" "$1" >&2; usage >&2; exit 2 ;;
+        *)            [ -z "$BASE_ARG" ] || die "expected at most one base, got '$BASE_ARG' and '$1'"
+                      BASE_ARG=$1 ;;
+    esac
+    shift
+done
+if [ $# -gt 0 ]; then
+    [ -z "$BASE_ARG" ] || die "expected at most one base"
+    BASE_ARG=$1; shift
+    [ $# -eq 0 ] || die "expected at most one base"
+fi
+
+command -v git >/dev/null 2>&1 || die "git not found in PATH"
+git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
+
+# Command line first, then config, then off.
+#
+# git separates the two failures and so must this: exit 1 is "not set", exit 128
+# is a value it could not read as a boolean. Treating those alike would turn a
+# typo into a silently disabled setting, which is the wrong way round for a
+# setting that removes worktrees.
+config_bool() {  # $1 = key, $2 = what an unset key means, 0 if not given
+    if _v=$(git config --type=bool --get "$1" 2>/dev/null); then _rc=0; else _rc=$?; fi
+    case "$_rc" in
+        0) [ "$_v" = "true" ] && printf 1 || printf 0 ;;
+        1) printf '%s' "${2:-0}" ;;
+        *) die "$1 in git config is not a boolean: $(git config --get "$1" 2>/dev/null)" ;;
+    esac
+}
+[ -n "$PUSH" ]  || PUSH=$(config_bool refresh.pushWithLease 1)
+[ -n "$PRUNE" ] || PRUNE=$(config_bool refresh.pruneWorktrees)
+[ -n "$SYNC" ]  || SYNC=$(config_bool refresh.syncStale 1)
+[ -n "$ICONS" ] || ICONS=$(config_bool refresh.icons 1)
+
+# git's own setting, not one of ours. Honouring it is the difference between a
+# tool you can run mid-edit and one that sends you to stash things first.
+AUTOSTASH=$(config_bool rebase.autoStash)
+
+[ -n "$COLOR" ] || COLOR=$(git config --get color.refresh 2>/dev/null || echo auto)
+case "$COLOR" in
+    always|true)  USE_COLOR=1 ;;
+    never|false)  USE_COLOR=0 ;;
+    # A pipe or a file wants the words, not the escapes, and NO_COLOR is the
+    # one setting that means this across every tool rather than only this one.
+    auto)         if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
+                      USE_COLOR=1
+                  else
+                      USE_COLOR=0
+                  fi ;;
+    *) die "colour is auto, always or never; got '$COLOR'" ;;
+esac
+set_palette "$ICONS" "$USE_COLOR"
+
+# Asking what is wrong is not asking for it to be changed.
+[ "$DOCTOR" -eq 0 ] || DRY_RUN=1
+
+# Advice this specific does not scale to twenty branches, and the table is
+# already the triage across them. Diagnosis is for the one you are standing in.
+if [ "$DOCTOR" -eq 1 ]; then
+    [ "$ALL" -eq 0 ] && [ "$STACK" -eq 0 ] \
+        || die "--doctor diagnoses one branch; drop --all and --stack"
+    [ "$(git rev-parse --is-inside-work-tree 2>/dev/null || echo false)" = "true" ] \
+        || die "--doctor diagnoses one branch; stand in a worktree"
+fi
+
+# A stack is anchored on the branch you are standing in, and from there it is
+# every worktree reachable through PR bases, upwards as well as down. The
+# branches above are the ones a rebase here strands, so they are the ones most
+# in need of coming along.
+if [ "$STACK" -eq 1 ]; then
+    [ "$ALL" -eq 0 ] || die "--stack and --all name different sets; pick one"
+    [ "$(git rev-parse --is-inside-work-tree 2>/dev/null || echo false)" = "true" ] \
+        || die "--stack starts from a branch; stand in a worktree, or use --all"
+    STACK_ROOT=$(git branch --show-current)
+    [ -n "$STACK_ROOT" ] || no_branch_here .
+    # Every branch-at-a-time behaviour below keys off ALL: skip a dirty worktree
+    # rather than refuse, throw a conflicted rebase away, order by base.
+    ALL=1
+fi
+
+# At the bare root there is no checkout, so there is no single branch the
+# command could mean. Everything else defaults to the branch you are standing in.
+if [ "$ALL" -eq 0 ] && [ "$(git rev-parse --is-inside-work-tree 2>/dev/null || echo false)" != "true" ]; then
+    ALL=1
+fi
+
+if [ "$ALL" -eq 1 ]; then
+    # --stack works by turning ALL on, so name the flag the caller actually typed.
+    [ "$STACK" -eq 1 ] && MODE=--stack || MODE=--all
+    [ "$INTERACTIVE" -eq 0 ] || die "-i rebases one branch; drop $MODE"
+    [ -z "$BASE_ARG" ]       || die "a base names one branch's target; drop $MODE"
+fi
+
+TMPDIR_RUN=$(mktemp -d) || die "cannot create temp dir"
+trap 'rm -rf "$TMPDIR_RUN"' EXIT INT TERM
+WORK="$TMPDIR_RUN/work"
+PLAN="$TMPDIR_RUN/plan"
+BASES="$TMPDIR_RUN/bases"
+NEEDS="$TMPDIR_RUN/needs"
+NOBASE="$TMPDIR_RUN/nobase"
+LEASES="$TMPDIR_RUN/leases"
+OUT="$TMPDIR_RUN/out"
+PUSHOUT="$TMPDIR_RUN/pushout"
+ALLPRS="$TMPDIR_RUN/allprs"
+: >"$BASES"; : >"$NEEDS"; : >"$NOBASE"; : >"$LEASES"; : >"$ALLPRS"
+TAB=$(printf '\t')
+
+has_remote() { git remote | grep -x "$1" >/dev/null 2>&1; }
+
+remote_head() {
+    _ref=$(git symbolic-ref --quiet --short "refs/remotes/$1/HEAD" 2>/dev/null) || _ref=""
+    if [ -z "$_ref" ]; then
+        git remote set-head "$1" --auto >/dev/null 2>&1 || true
+        _ref=$(git symbolic-ref --quiet --short "refs/remotes/$1/HEAD" 2>/dev/null) || _ref=""
+    fi
+    printf '%s' "${_ref#"$1"/}"
+}
+
+# Emit "<branch-or-dash><TAB><path>" per non-bare worktree. Dash means detached.
+list_worktrees() {
+    git worktree list --porcelain | awk '
+        /^worktree /  { path = substr($0, 10); branch = ""; bare = 0; det = 0; next }
+        /^bare$/      { bare = 1; next }
+        /^detached$/  { det = 1; next }
+        /^branch /    { branch = substr($0, 8); sub(/^refs\/heads\//, "", branch); next }
+        /^$/          { if (path != "" && !bare) printf "%s\t%s\n", (det ? "-" : branch), path
+                        path = "" }
+    '
+}
+
+# icon, branch, base, status. The base column asks the same question on every
+# line, so a branch without one gets "-" rather than a gap. Anything this run is
+# not acting on belongs to --doctor and not here.
+BRANCH_W=24
+BASE_W=16
+# Work of this branch's own that origin does not have. Counted by patch and
+# bounded by the base, because a branch rebased locally carries the base's
+# commits in origin/<branch>..HEAD: 410 of them on one worktree here, of which
+# five were actually its own. A rebase rewrites shas without creating work, so
+# by this measure a freshly rebased branch is correctly nothing to push.
+unpushed_note() {  # $1 = worktree, $2 = branch, $3 = base ref
+    if ! git rev-parse --verify --quiet "refs/remotes/origin/$2" >/dev/null; then
+        printf 'not on origin'; return
+    fi
+    _n=$(git -C "$1" cherry "origin/$2" "$2" "$3" 2>/dev/null | grep -c '^+' || true)
+    [ "$_n" -eq 0 ] || printf '%s unpushed' "$_n"
+}
+
+# Work origin has not got is a problem the run reported, so it gets an entry
+# like every other one. Both paths call this: a dry run is where --doctor reads.
+report_unpushed() {
+    case "$UNPUSHED" in
+        "") return ;;
+        "not on origin")
+            _n=$(git -C "$DIR" log --format='%h  %s' "$REF..HEAD" 2>/dev/null | tr '\n' '|')
+            if [ -z "$_n" ]; then
+                # Not on origin and nothing on it either: a branch in name only.
+                printf '%s\t%s\t%s\n' "$BRANCH" \
+                    "not on origin, and carries no commits of its own" \
+                    "git worktree remove $DIR && git branch -d $BRANCH   if it is finished with" >>"$NEEDS"
+            else
+                printf '%s\t%s\t%s\t%s\n' "$BRANCH" \
+                    "not on origin; these commits exist only here" \
+                    "git push -u origin $BRANCH" "$_n" >>"$NEEDS"
+            fi ;;
+        *)  _n=$(git -C "$DIR" cherry -v "origin/$BRANCH" "$BRANCH" "$REF" 2>/dev/null \
+                 | sed -n 's/^+ \([0-9a-f]\{9\}\)[0-9a-f]* /\1  /p' | tr '\n' '|')
+            printf '%s\t%s\t%s\t%s\n' "$BRANCH" \
+                "${UNPUSHED% unpushed} commits here that origin has not got" \
+                "git push   (or: git refresh --please)" "$_n" >>"$NEEDS" ;;
+    esac
+}
+
+# A branch can be more than one thing at once, and the row has one column and
+# one icon to say so, so an extra only ever raises how the cell reads: a pushed
+# branch that is also diverged from origin is a diverged branch.
+note_row() {  # $1 = branch, $2 = base, $3 = severity, $4 = what happened
+    _sev=$3
+    _text=$4
+    for _extra in "$STASHNOTE" "$DIVNOTE" "$UNPUSHED"; do
+        [ -n "$_extra" ] || continue
+        [ -z "$_text" ] && _text=$_extra || _text="$_text, $_extra"
+        case "$_sev" in bad|warn) ;; *) _sev=warn ;; esac
+    done
+    row "$1" "$2" "$_sev" "$_text"
+}
+
+# The table gives the base a column of its own. One branch has no table, so
+# the sentence has to carry it, and a push you asked for by name is an outcome
+# even when it turns out origin already had the branch.
+single_note() {  # reads MOVED, BASEDISP, SYNCNOTE, PUSHKIND; sets NOTE, NOTESEV
+    [ "$MOVED" -eq 1 ] && _what="rebased onto $BASEDISP" || _what="current with $BASEDISP"
+    _what="$_what$SYNCNOTE"
+
+    case "$PUSHKIND" in
+        pushed)
+            # A rebase rewrote every sha, so a count of what went up says
+            # nothing. A push without one published exactly the commits that
+            # were sitting here.
+            if [ "$MOVED" -eq 1 ]; then
+                _what="$_what, pushed"
+            else
+                case "$PRE_UNPUSHED" in
+                    *' unpushed') _n=${PRE_UNPUSHED% unpushed}
+                                  [ "$_n" = 1 ] && _c=commit || _c=commits
+                                  _what="$_what, pushed $_n $_c" ;;
+                    *)            _what="$_what, pushed" ;;
+                esac
+            fi ;;
+        uptodate) _what="$_what, origin already has it" ;;
+        refused)  _what="$_what, push refused" ;;
+    esac
+
+    if [ "$PUSHKIND" = refused ]; then
+        NOTESEV=bad
+    elif [ -n "$STASHNOTE" ]; then
+        NOTESEV=warn
+    elif [ "$MOVED" -eq 1 ] || [ "$PUSHKIND" = pushed ] || [ -n "$SYNCNOTE" ]; then
+        NOTESEV=ok
+    else
+        NOTESEV=plain
+    fi
+    NOTE=$_what
+}
+
+# --doctor implies --dry-run, so it never runs the rebase that leaves this
+# behind and cannot re-derive it. Said at the moment it is known instead.
+stash_advice() {  # $1 = worktree dir
+    printf '   %s\n' \
+        "your uncommitted changes are left conflicted in $1" \
+        "resolve them, then: git stash drop   (they are still in the stash)" >&2
+}
+
+SINGLE_STASH_DIR=""
+SINGLE_NOTE=""
+SINGLE_BASE=""
+SINGLE_SEV=""
+row() {  # $1 = branch, $2 = base, $3 = severity, $4 = status, possibly empty
+    if [ "$ALL" -eq 0 ]; then SINGLE_BASE=$2; SINGLE_SEV=$3; SINGLE_NOTE=$4; return; fi
+    if [ -n "$4" ]; then
+        printf '%-*s  %-*s  %s\n' "$BRANCH_W" "$1" "$BASE_W" "$2" "$(paint "$3" "$4")"
+    else
+        printf '%-*s  %s\n' "$BRANCH_W" "$1" "$2"
+    fi
+}
+
+# ---- what to work on -------------------------------------------------------
+
+if [ "$ALL" -eq 1 ]; then
+    list_worktrees >"$WORK"
+else
+    CUR=$(git branch --show-current)
+    [ -n "$CUR" ] || no_branch_here .
+    printf '%s\t%s\n' "$CUR" "$(git rev-parse --show-toplevel)" >"$WORK"
+fi
+
+# Where origin stood before this run, which is the only honest thing to hold a
+# push to. A bare --force-with-lease is checked against the refs the fetch below
+# is about to move, so it would approve overwriting a colleague's commit that
+# arrived in that very fetch. --force-if-includes is no help either: it reads a
+# branch reflog, and a bare repository keeps none.
+if [ "$PUSH" -eq 1 ]; then
+    while IFS="$TAB" read -r LB LD; do
+        [ -n "${LD:-}" ] || continue
+        if [ "$LB" != "-" ]; then
+            LSHA=$(git rev-parse --verify --quiet "refs/remotes/origin/$LB" || true)
+            [ -z "$LSHA" ] || printf '%s\t%s\n' "$LB" "$LSHA" >>"$LEASES"
+        fi
+    done <"$WORK"
+fi
+
+# ---- refresh the remotes ---------------------------------------------------
+
+# A fetch over every remote narrates every ref that moved, and GitHub's
+# refs/pull/* move whenever anyone force-pushes any PR in the repository. What
+# the fetch changed about your branches is what the rows below are for.
+[ "$VERBOSE" -eq 1 ] && FETCH_QUIET="" || FETCH_QUIET="--quiet"
+
+# A real fetch even for a dry run. What --dry-run leaves alone is the
+# remote-tracking refs, which are the only thing a dry run has to predict
+# against: with them stale it answers about the origin of the last real fetch,
+# and reports a branch clean that conflicts a second later. Nothing of yours is
+# a remote-tracking ref, so there is no work here for a dry run to protect.
+git fetch --all --prune $FETCH_QUIET
+
+DEFAULT=$(remote_head origin)
+[ -n "$DEFAULT" ] || die "cannot resolve origin/HEAD; run: git remote set-head origin --auto"
+
+if has_remote upstream; then
+    if ! git rev-parse --verify --quiet "refs/remotes/upstream/$DEFAULT" >/dev/null; then
+        printf '%s\n' "$(paint warn "upstream has no $DEFAULT; leaving origin/$DEFAULT alone")" >&2
+    elif [ "$DRY_RUN" -eq 1 ]; then
+        printf '%s\n' "$(paint "" "would sync origin/$DEFAULT from upstream" "$I_SYNC")"
+    # Braces are load-bearing: a zsh reader would take `$DEFAULT:r` as a modifier.
+    elif PUSH_OUT=$(git push origin "upstream/${DEFAULT}:refs/heads/${DEFAULT}" 2>&1); then
+        case "$PUSH_OUT" in
+            *'Everything up-to-date'*)
+                printf '%s\n' "$(paint plain "origin/$DEFAULT already matches upstream")" ;;
+            *)  printf '%s\n' "$(paint ok "origin/$DEFAULT fast-forwarded from upstream" "$I_UP")" ;;
+        esac
+    else
+        printf '%s\n' \
+            "$(paint warn "origin/$DEFAULT has diverged from upstream/$DEFAULT; using origin as-is")" >&2
+    fi
+fi
+
+# One query for every open PR beats one per branch: a single round trip, and it
+# cannot be misread as "no PR" when a call gets throttled. gh is optional; a
+# branch simply falls through to its recorded base without it.
+if command -v gh >/dev/null 2>&1; then
+    REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || REPO=""
+    if [ -n "$REPO" ]; then
+        gh pr list -R "$REPO" --state open --limit 1000 \
+            --json headRefName,baseRefName \
+            --jq '.[] | [.headRefName, .baseRefName] | @tsv' >"$BASES" 2>/dev/null \
+            || : >"$BASES"
+    fi
+fi
+
+pr_base()       { awk -F"$TAB" -v b="$1" '$1 == b { print $2; exit }' "$BASES"; }
+recorded_base() { git config --get "branch.$1.base" 2>/dev/null || true; }
+
+# ---- decide each branch's base --------------------------------------------
+
+# The base a branch was built on, guessed from where it forked: whichever
+# candidate shares the most recent fork point is the likeliest parent, measured
+# as the commits this branch has gained since that point.
+#
+# Not "is the candidate an ancestor". A branch a few commits behind its base
+# fails that test, so the true base is rejected while every stale merged branch
+# still contained in the history passes it, and one of those wins instead.
+#
+# A guess, not a fact, which is why it is printed for review rather than written.
+infer_base() {  # $1 = worktree dir, $2 = branch
+    _best=$DEFAULT
+    _dist=$(git -C "$1" rev-list --count \
+        "$(git -C "$1" merge-base "$DEFAULT" "$2" 2>/dev/null)..$2" 2>/dev/null) || _dist=""
+    _xsha=$(git -C "$1" rev-parse "$2")
+    while IFS="$TAB" read -r _cand _cdir; do
+        [ -n "${_cdir:-}" ] || continue
+        [ "$_cand" != "$2" ] && [ "$_cand" != "-" ] && [ "$_cand" != "$DEFAULT" ] || continue
+        _mb=$(git -C "$1" merge-base "$_cand" "$2" 2>/dev/null) || continue
+        # Fork point at this branch's own tip means the candidate sits above it
+        # in the stack, not below: that is a child, never a base.
+        [ "$_mb" != "$_xsha" ] || continue
+        _n=$(git -C "$1" rev-list --count "$_mb..$2" 2>/dev/null) || continue
+        if [ -z "$_dist" ] || [ "$_n" -lt "$_dist" ]; then _dist=$_n; _best=$_cand; fi
+    done <"$WORK"
+    printf '%s' "$_best"
+}
+
+# Where a branch merged to, for following a base merged and deleted out from
+# under its stack. One hop only: a fully collapsed chain lands on the default.
+merged_into() {
+    [ -n "${REPO:-}" ] || return 0
+    gh pr list -R "$REPO" --head "$1" --state merged --limit 1 \
+        --json baseRefName --jq '.[0].baseRefName // empty' 2>/dev/null || true
+}
+
+resolve_base() {  # $1 = branch, $2 = worktree; prints "<base><TAB><why>", or nothing
+    _b=$(pr_base "$1")
+    if [ -n "$_b" ]; then
+        # The open PR is the authority, so teach the record what it says. Without
+        # this the record is written once by git-new-worktree and never again: it
+        # goes stale the moment a PR is retargeted, and a branch created with
+        # plain `git worktree add` never gets one at all. Writing it here means
+        # the base survives the PR being merged and closed.
+        if [ "$DRY_RUN" -eq 0 ] && [ "$(recorded_base "$1")" != "$_b" ]; then
+            git config "branch.$1.base" "$_b"
+        fi
+        printf '%s\t%s' "$_b" "open PR base"; return
+    fi
+
+    _b=$(recorded_base "$1")
+    if [ -n "$_b" ]; then
+        if git rev-parse --verify --quiet "refs/remotes/origin/$_b" >/dev/null; then
+            printf '%s\t%s' "$_b" "recorded base"; return
+        fi
+        # A recorded base whose branch is gone is what a partial stack merge
+        # leaves behind. Follow it to where it went rather than reporting a
+        # base that no longer exists.
+        _m=$(merged_into "$_b")
+        [ -n "$_m" ] || _m=$DEFAULT
+        printf '%s\t%s' "$_m" "$_b merged into $_m"; return
+    fi
+
+    if [ "$ALL" -eq 0 ]; then printf '%s\t%s' "$DEFAULT" "no open PR"; return; fi
+
+    # No PR, nothing recorded. The default branch is nearly always right, but
+    # assuming it would flatten an unopened stack onto it, so assume it only
+    # where the shape of the history agrees. infer_base falls back to the
+    # default whenever it cannot tell, so it can only withhold the assumption
+    # by positively naming another branch as the parent.
+    if [ "$(infer_base "$2" "$1")" = "$DEFAULT" ]; then
+        printf '%s\t%s' "$DEFAULT" "assumed"
+    fi
+}
+
+: >"$PLAN"
+while IFS="$TAB" read -r BRANCH DIR; do
+    [ -n "${DIR:-}" ] || continue
+    if [ -n "$BASE_ARG" ]; then
+        printf '%s\t%s\t%s\t%s\n' "$BRANCH" "$DIR" "$BASE_ARG" "given" >>"$PLAN"
+        continue
+    fi
+    if [ "$BRANCH" = "-" ] || [ "$BRANCH" = "$DEFAULT" ]; then
+        printf '%s\t%s\t%s\t%s\n' "$BRANCH" "$DIR" "$DEFAULT" "default branch" >>"$PLAN"
+        continue
+    fi
+    RB=$(resolve_base "$BRANCH" "$DIR")
+    if [ -z "$RB" ]; then
+        printf '%s\t%s\n' "$BRANCH" "$DIR" >>"$NOBASE"
+        # "-" rather than an empty field: read collapses runs of tabs, tab being
+        # IFS whitespace, so an empty column would shift every later one left.
+        printf '%s\t%s\t-\t%s\n' "$BRANCH" "$DIR" "no base" >>"$PLAN"
+    else
+        printf '%s\t%s\t%s\n' "$BRANCH" "$DIR" "$RB" >>"$PLAN"
+    fi
+done <"$WORK"
+
+# Keep only what is connected to the branch we started on, following bases both
+# ways. The default branch is never added, which is what stops the walk: without
+# that, one branch based on main would drag in every other branch based on main.
+if [ "$STACK" -eq 1 ]; then
+    awk -F"$TAB" -v cur="$STACK_ROOT" -v def="$DEFAULT" '
+        { b[NR] = $1; base[NR] = $3; line[NR] = $0; n = NR }
+        END {
+            keep[cur] = 1
+            moved = 1
+            while (moved) {
+                moved = 0
+                for (i = 1; i <= n; i++) {
+                    if (b[i] == def) continue
+                    if (keep[b[i]] && base[i] != def && base[i] != "-" && base[i] != "" && !keep[base[i]]) {
+                        keep[base[i]] = 1; moved = 1
+                    }
+                    if (keep[base[i]] && !keep[b[i]]) { keep[b[i]] = 1; moved = 1 }
+                }
+            }
+            for (i = 1; i <= n; i++) if (keep[b[i]] && b[i] != def) print line[i]
+        }
+    ' "$PLAN" >"$PLAN.stack" && mv "$PLAN.stack" "$PLAN"
+
+    # Branches outside the stack have no claim on the doctor's attention.
+    awk -F"$TAB" 'NR == FNR { keep[$1] = 1; next } keep[$1]' "$PLAN" "$NOBASE" >"$NOBASE.stack" \
+        && mv "$NOBASE.stack" "$NOBASE"
+fi
+
+# A stack only restacks correctly from the bottom up: with --please, pushing the
+# branch below moves the origin ref the next one rebases onto. Order by base,
+# putting a branch after any branch it is stacked on.
+if [ "$ALL" -eq 1 ]; then
+    awk -F"$TAB" '
+        { b[NR]=$1; d[NR]=$2; base[NR]=$3; why[NR]=$4; n=NR }
+        END {
+            done_ct = 0
+            while (done_ct < n) {
+                moved = 0
+                for (i = 1; i <= n; i++) {
+                    if (out[i]) continue
+                    ready = 1
+                    for (j = 1; j <= n; j++)
+                        if (!out[j] && j != i && b[j] == base[i]) ready = 0
+                    if (ready) {
+                        printf "%s\t%s\t%s\t%s\n", b[i], d[i], base[i], why[i]
+                        out[i] = 1; done_ct++; moved = 1
+                    }
+                }
+                # A cycle cannot be ordered; emit the rest rather than spin.
+                if (!moved)
+                    for (i = 1; i <= n; i++)
+                        if (!out[i]) {
+                            printf "%s\t%s\t%s\t%s\n", b[i], d[i], base[i], why[i]
+                            out[i] = 1; done_ct++
+                        }
+            }
+        }
+    ' "$PLAN" >"$PLAN.sorted" && mv "$PLAN.sorted" "$PLAN"
+fi
+
+# ---- do the work -----------------------------------------------------------
+
+# In --all the rebases are speculative and thrown away, so they have no business
+# teaching rerere anything. On the branch you are standing in, the rebase is the
+# one you stay and resolve, which is the case rerere exists for: it records what
+# you worked out and replays it when the same conflict comes round again.
+git_rebase() {  # $1 = worktree dir, remaining args go to git rebase
+    _d=$1; shift
+    if [ "$ALL" -eq 1 ]; then
+        git -C "$_d" -c rerere.enabled=false rebase "$@"
+    else
+        git -C "$_d" rebase "$@"
+    fi
+}
+
+push_branch() {
+    _lease=$(awk -F"$TAB" -v b="$2" '$1 == b { print $2; exit }' "$LEASES")
+    if [ -n "$_lease" ]; then
+        git -C "$1" push "--force-with-lease=$2:$_lease" origin "$2"
+    else
+        git -C "$1" push origin "$2"
+    fi
+}
+
+BRANCH_W=$(cut -f1 "$PLAN" | awk '{ if (length > m) m = length } END { print (m > 10 ? m : 10) }')
+# The plan holds bare branch names; the column shows the ref they resolve to,
+# which is seven characters longer for everything that lives on origin.
+BASE_W=$(cut -f3 "$PLAN" | awk '{ if (length > m) m = length } END { m += 7; print (m > 11 ? m : 11) }')
+
+# The rows read the same whether or not anything was done, which is the point:
+# one format to learn. That leaves the run itself to say which this was.
+if [ "$DRY_RUN" -eq 1 ]; then
+    printf '%s\n' "$(paint "" "dry run: fetched, and changed nothing else. what follows is a prediction." "$I_DRY")"
+fi
+
+[ "$ALL" -eq 0 ] || printf '%s%-*s  %-*s  %s%s\n' \
+    "$C_HEAD" "$BRANCH_W" "BRANCH" "$BASE_W" "BASE" "STATUS" "$C_OFF"
+
+N_REBASED=0; N_CURRENT=0; N_CONFLICT=0; N_DIRTY=0; N_NOBASE=0; N_OTHER=0
+N_TOTAL=0; N_WOULD=0; N_PUSHED=0; N_REFUSED=0; N_WOULDCLASH=0
+N_SYNCED=0; N_DIVERGED=0
+
+while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
+    [ -n "${DIR:-}" ] || continue
+    N_TOTAL=$((N_TOTAL + 1))
+
+    if [ "$BRANCH" = "-" ]; then
+        row "$(basename "$DIR")" "-" skip "detached"
+        N_OTHER=$((N_OTHER + 1)); continue
+    fi
+    if [ ! -d "$DIR" ]; then
+        # --prune clears the record itself, but only for a branch already gone
+        # from origin. A branch still live there with a missing directory is
+        # plain git's business, not this run's.
+        if [ "$PRUNE" -eq 1 ] \
+           && ! git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null; then
+            row "$BRANCH" "-" skip "gone"
+        else
+            row "$BRANCH" "-" skip "gone"
+            printf '%s\t%s\t%s\n' "$BRANCH" \
+                "the worktree directory is gone, but the branch is still on origin" \
+                "git worktree prune" >>"$NEEDS"
+        fi
+        N_OTHER=$((N_OTHER + 1)); continue
+    fi
+    if [ "$BASE" = "-" ]; then
+        row "$BRANCH" "-" skip "no base"
+        N_NOBASE=$((N_NOBASE + 1)); continue
+    fi
+
+    # Untracked files are none of a rebase's business; tracked changes are.
+    # With rebase.autoStash the rebase deals with them itself, so the run has no
+    # business refusing first; without it, there is nothing to hand the changes
+    # to and the worktree is left alone.
+    if [ "$AUTOSTASH" -eq 0 ] \
+       && { ! git -C "$DIR" diff --quiet || ! git -C "$DIR" diff --cached --quiet; }; then
+        [ "$ALL" -eq 1 ] \
+            || die "you have uncommitted changes; commit or stash them, or set rebase.autoStash"
+        COUNT=$(git -C "$DIR" status --porcelain | grep -vc '^??' || true)
+        row "$BRANCH" "$BASE" skip "dirty"
+        printf '%s\t%s\t%s\n' "$BRANCH" \
+            "$COUNT uncommitted change(s), so it was left alone" \
+            "cd $DIR && git status" >>"$NEEDS"
+        N_DIRTY=$((N_DIRTY + 1)); continue
+    fi
+
+    if git rev-parse --verify --quiet "refs/remotes/origin/$BASE" >/dev/null; then
+        REF="origin/$BASE"
+    elif git rev-parse --verify --quiet "$BASE" >/dev/null; then
+        REF=$BASE
+    else
+        row "$BRANCH" "$BASE" skip "no base"
+        printf '%s\t%s\n' "$BRANCH" "$DIR" >>"$NOBASE"
+        N_NOBASE=$((N_NOBASE + 1)); continue
+    fi
+
+    # The ref as it is actually used. Every rebase here targets the remote
+    # branch, never the local one of the same name, and that is the whole
+    # reason a stack needs its lower branches pushed before the ones above it
+    # will land on anything new. Printing a bare name would hide that. The
+    # default branch is no exception: it is updated from origin/<default> like
+    # everything else, so it gets the ref rather than a dash.
+    BASEDISP=$REF
+    UNPUSHED=$(unpushed_note "$DIR" "$BRANCH" "$REF")
+
+    # A branch can be stale against its own remote, not just against its base:
+    # someone rebases it elsewhere and force-pushes, leaving these commits as
+    # patch-identical orphans. Rebasing those onto the base replays work that
+    # already landed, against a base that already contains it, which is a
+    # conflict per file for no reason. Adopting the remote first avoids all of
+    # it -- but only when this branch holds nothing the remote lacks.
+    SYNCNOTE=""; DIVNOTE=""; STASHNOTE=""; SYNCED=0
+    if [ "$SYNC" -eq 1 ] \
+       && git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null \
+       && [ "$(git -C "$DIR" rev-parse HEAD)" != "$(git -C "$DIR" rev-parse "origin/$BRANCH")" ]; then
+        if git -C "$DIR" merge-base --is-ancestor "origin/$BRANCH" HEAD 2>/dev/null; then
+            # Simply ahead: ordinary unpushed work, with the remote where this
+            # branch left it. Nothing was rewritten and there is nothing to adopt.
+            SYNCKIND=""
+        elif git -C "$DIR" merge-base --is-ancestor HEAD "origin/$BRANCH" 2>/dev/null; then
+            SYNCKIND=ff
+        # Limited to this branch's own commits. Rebasing locally onto a newer
+        # base pulls that base's commits into origin/<branch>..HEAD, and an
+        # unlimited cherry counts every one of them as work of this branch's
+        # own -- hundreds of them, on a branch whose only commits are already
+        # upstream. That reads as "hands off" for exactly the branch most in
+        # need of adopting its remote.
+        elif ! git -C "$DIR" cherry "origin/$BRANCH" "$BRANCH" "$REF" | grep '^+' >/dev/null 2>&1; then
+            # Every commit of its own is upstream by patch, whatever its hash.
+            SYNCKIND=reset
+        else
+            # Real local work under a rewritten remote. Which side wins is a
+            # judgement about intent, so it is reported and left alone.
+            SYNCKIND=""
+            # Stated here, so the run names the problem; --doctor is where the
+            # decision about it gets recommended.
+            DIVNOTE="diverged from origin"
+            printf '%s\t%s\t%s\n' "$BRANCH" \
+                "has commits of its own that origin/$BRANCH lacks, and was rewritten underneath them" \
+                "cd $DIR && git pull --rebase" >>"$NEEDS"
+            N_DIVERGED=$((N_DIVERGED + 1))
+        fi
+
+        if [ -n "$SYNCKIND" ] && [ "$DRY_RUN" -eq 1 ]; then
+            SYNCNOTE=", would adopt origin/$BRANCH"
+        elif [ "$SYNCKIND" = ff ]; then
+            git -C "$DIR" merge --ff-only "origin/$BRANCH" >/dev/null 2>&1
+            SYNCNOTE=", fast-forwarded to origin/$BRANCH"
+            SYNCED=1
+        elif [ "$SYNCKIND" = reset ]; then
+            # Rebase onto the remote rather than reset --hard onto it. Where the
+            # guard above is right the result is identical, git dropping every
+            # commit as already applied. Where it is wrong the work is replayed
+            # on top instead of destroyed, and a bare repository keeps no branch
+            # reflog to have recovered it from.
+            if git_rebase "$DIR" "origin/$BRANCH" >"$OUT" 2>&1; then
+                SYNCNOTE=", adopted origin/$BRANCH"
+                SYNCED=1
+            else
+                git_rebase "$DIR" --abort >/dev/null 2>&1 || true
+                printf '%s\t%s\t%s\n' "$BRANCH" \
+                    "could not be replayed onto origin/$BRANCH" \
+                    "cd $DIR && git pull --rebase" >>"$NEEDS"
+                N_DIVERGED=$((N_DIVERGED + 1))
+            fi
+        fi
+    fi
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        # --doctor changes nothing, so it cannot learn about a conflict by
+        # attempting the rebase. merge-tree does the same three-way merge in
+        # memory and reports what conflicts, leaving the worktree alone.
+        #
+        # A merge of the two tips, though, where a rebase replays each commit:
+        # close, and occasionally not the same, so this predicts rather than promises.
+        # Predicted for any dry run, not just --doctor. Which branches will not
+        # replay cleanly is the one thing a dry run knows that the branch list
+        # does not, so withholding it leaves nothing behind but the names.
+        if ! git -C "$DIR" merge-tree --write-tree "$BRANCH" "$REF" >"$OUT" 2>&1 \
+           && grep -q '^[0-7]\{6\} [0-9a-f]* [123]	' "$OUT"; then
+            CLASH=$(awk -F'\t' '/^[0-7]{6} [0-9a-f]+ [123]\t/ { print $2 }' "$OUT" | sort -u)
+            NFILES=$(printf '%s' "$CLASH" | grep -c . || true)
+            SAMPLE=$(printf '%s\n' "$CLASH" | grep . | tr '\n' '|')
+            [ "$NFILES" -eq 1 ] && NOUN=file || NOUN=files
+            note_row "$BRANCH" "$BASEDISP" warn "conflict, $NFILES $NOUN"
+            printf '%s\t%s\t%s\t%s\n' "$BRANCH" \
+                "would conflict in $NFILES $NOUN against $REF" \
+                "git rebase $REF   to do it now and resolve them" \
+                "$SAMPLE" >>"$NEEDS"
+            N_WOULDCLASH=$((N_WOULDCLASH + 1))
+        else
+            # The table has a column for the base; one branch has only the
+            # sentence, and a dry run that reports an extra must not lose the
+            # base to it.
+            if [ "$ALL" -eq 1 ]; then
+                note_row "$BRANCH" "$BASEDISP" "" ""
+            else
+                note_row "$BRANCH" "$BASEDISP" "" "would rebase onto $BASEDISP"
+            fi
+            N_WOULD=$((N_WOULD + 1))
+        fi
+        report_unpushed
+        continue
+    fi
+
+    if git_rebase "$DIR" "$REF" >"$OUT" 2>&1; then
+        # A push clears this, and how much it published is worth saying.
+        PRE_UNPUSHED=$UNPUSHED
+        PUSHKIND=""
+        # The rebase itself succeeded and the branch has moved; what failed is
+        # putting the working tree back. Left in place rather than unwound,
+        # because the conflict is between your edits and your own new base, and
+        # only you can settle it.
+        if grep -q 'Applying autostash resulted in conflicts' "$OUT"; then
+            STASHNOTE="autostash conflicted"
+            N_DIRTY=$((N_DIRTY + 1))
+        else
+            STASHNOTE=""
+        fi
+
+        if grep -q 'is up to date' "$OUT"; then
+            NOTE="current"; NOTESEV=plain; MOVED=0
+            [ -z "$SYNCNOTE" ] || { NOTE="synced"; NOTESEV=ok; }
+            BUCKET=current
+        else
+            # A real run has an outcome to report and this is it: the branch
+            # moved and its commits were rewritten. Only a dry run, which has
+            # no outcome, leaves the ordinary case blank.
+            NOTE="rebased"; NOTESEV=ok; MOVED=1
+            BUCKET=rebased
+        fi
+
+        # In --all only what moved is worth pushing; a run over every worktree
+        # should not fire off pushes for branches it did not touch. On one
+        # branch you asked to publish it, whether or not the rebase had work.
+        # Push what moved, and what holds work origin has not got. A rebase
+        # rewrites shas without adding work, so the first covers a restack the
+        # PR needs and the second covers commits that were never sent. Neither
+        # fires for a branch this run had no reason to touch.
+        if [ "$PUSH" -eq 1 ] \
+           && { [ "$MOVED" -eq 1 ] || [ -n "$UNPUSHED" ] || [ "$ALL" -eq 0 ]; }; then
+            if push_branch "$DIR" "$BRANCH" >"$PUSHOUT" 2>&1; then
+                if grep -q 'Everything up-to-date' "$PUSHOUT"; then
+                    # Nothing was published. In a table of twenty that is not
+                    # worth a row of its own; on the branch you asked to push,
+                    # it is the answer.
+                    PUSHKIND=uptodate
+                else
+                    # Say which happened: a push behind a rebase is a restack,
+                    # a push on its own only published what was already here.
+                    [ "$MOVED" -eq 1 ] && NOTE="pushed" || NOTE="pushed, no rebase needed"
+                    NOTESEV=ok
+                    PUSHKIND=pushed
+                    BUCKET=pushed
+                fi
+            else
+                PUSHKIND=refused
+                NOTE="push refused"; NOTESEV=bad
+                printf '%s\t%s\t%s\n' "$BRANCH" \
+                    "origin/$BRANCH has commits this rebase would discard" \
+                    "cd $DIR && git pull --rebase origin $BRANCH" >>"$NEEDS"
+                BUCKET=refused
+                [ "$VERBOSE" -eq 1 ] && cat "$PUSHOUT"
+            fi
+        fi
+
+        # The header promises a count of worktrees, so the buckets have to
+        # partition them: one branch, one bucket, chosen once nothing else can
+        # change it. A branch that only adopted its remote is "synced"; where it
+        # went on to rebase or push, that is the more useful outcome to name and
+        # the sync stays a note on the row.
+        if [ "$BUCKET" = current ] && [ "$SYNCED" -eq 1 ]; then BUCKET=synced; fi
+        case "$BUCKET" in
+            current) N_CURRENT=$((N_CURRENT + 1)) ;;
+            synced)  N_SYNCED=$((N_SYNCED + 1)) ;;
+            rebased) N_REBASED=$((N_REBASED + 1)) ;;
+            pushed)  N_PUSHED=$((N_PUSHED + 1)) ;;
+            refused) N_REFUSED=$((N_REFUSED + 1)) ;;
+        esac
+
+        UNPUSHED=$(unpushed_note "$DIR" "$BRANCH" "$REF")
+        report_unpushed
+        [ "$ALL" -eq 1 ] || single_note
+        note_row "$BRANCH" "$BASEDISP" "$NOTESEV" "$NOTE"
+        if [ -n "$STASHNOTE" ]; then
+            if [ "$ALL" -eq 1 ]; then
+                stash_advice "$DIR"
+            else
+                SINGLE_STASH_DIR=$DIR
+            fi
+        fi
+        [ "$VERBOSE" -eq 1 ] && cat "$OUT"
+
+        if [ "$INTERACTIVE" -eq 1 ]; then
+            MERGE_BASE=$(git -C "$DIR" merge-base "$REF" HEAD)
+            printf '%s\n' "$(paint "" \
+                "Interactive rebase from $(git -C "$DIR" rev-parse --short "$MERGE_BASE")" "$I_EDIT")"
+            git -C "$DIR" rebase -i "$MERGE_BASE"
+        fi
+    else
+        UNMERGED=$(git -C "$DIR" diff --name-only --diff-filter=U 2>/dev/null || true)
+        NFILES=$(printf '%s' "$UNMERGED" | grep -c . || true)
+        SAMPLE=$(printf '%s\n' "$UNMERGED" | grep . | tr '\n' '|')
+        [ "$NFILES" -eq 1 ] && NOUN=file || NOUN=files
+        # In --all the attempt is speculative and gets thrown away. On one branch
+        # you asked for it, so the conflict is left in place to resolve.
+        if [ "$ALL" -eq 1 ]; then
+            # Twenty speculative attempts cannot leave six worktrees wedged, so
+            # this one is thrown away and offered back as a command to run.
+            git_rebase "$DIR" --abort >/dev/null 2>&1 || true
+            note_row "$BRANCH" "$BASEDISP" bad "conflict, $NFILES $NOUN"
+            printf '%s\t%s\t%s\n' "$BRANCH" "$SAMPLE" \
+                "cd $DIR && git rebase $REF" >>"$NEEDS"
+        else
+            # Standing in the branch and asking for it is asking to deal with
+            # what comes back. Aborting here only means running the identical
+            # rebase again by hand to reach the same conflict.
+            if [ "$NFILES" -eq 0 ]; then
+                # Every conflict matched something rerere had seen before. The
+                # rebase is still paused, but there is nothing left to work out.
+                note_row "$BRANCH" "$BASEDISP" warn "conflict resolved by rerere, rebase paused"
+                printf '%s\t%s\t%s\n' "$BRANCH" \
+                    "rerere had seen every one of these conflicts and resolved them" \
+                    "check the result, then: git rebase --continue" >>"$NEEDS"
+            else
+                note_row "$BRANCH" "$BASEDISP" bad "conflict, $NFILES $NOUN, rebase in progress"
+                printf '%s\t%s\t%s\t%s\n' "$BRANCH" \
+                    "$NFILES $NOUN conflict, and the rebase is waiting on them" \
+                    "resolve, then: git rebase --continue   (or: git rebase --abort)" \
+                    "$SAMPLE" >>"$NEEDS"
+            fi
+        fi
+        N_CONFLICT=$((N_CONFLICT + 1))
+        [ "$VERBOSE" -eq 1 ] && cat "$OUT"
+    fi
+done <"$PLAN"
+
+# ---- clear out what is finished --------------------------------------------
+
+# Sets REASON and returns 0 when the branch looks merged into $DEFAULT.
+REASON=""
+is_merged() {
+    _branch=$1
+    REASON=""
+
+    if [ -n "${REPO:-}" ]; then
+        _pr=$(gh pr list -R "$REPO" --head "$_branch" --state merged \
+                --json number --jq '.[0].number // empty' 2>/dev/null) || _pr=""
+        if [ -n "$_pr" ]; then REASON="merged PR #$_pr"; return 0; fi
+    fi
+
+    if git merge-base --is-ancestor "$_branch" "origin/$DEFAULT" 2>/dev/null; then
+        REASON="already an ancestor of origin/$DEFAULT"
+        return 0
+    fi
+
+    # Squash-merge detection: build a throwaway commit carrying the branch tree
+    # on top of the fork point. If its patch is already upstream, the branch
+    # content landed even though no commit of it did.
+    _base=$(git merge-base "origin/$DEFAULT" "$_branch" 2>/dev/null) || return 1
+    _tree=$(git rev-parse "$_branch^{tree}" 2>/dev/null) || return 1
+    _probe=$(git commit-tree "$_tree" -p "$_base" -m "refresh prune probe" 2>/dev/null) || return 1
+    if git cherry "origin/$DEFAULT" "$_probe" 2>/dev/null | grep -q '^-'; then
+        REASON="tree already in origin/$DEFAULT (squash-merged)"
+        return 0
+    fi
+
+    return 1
+}
+
+N_PRUNED=0; N_UNMERGED=0
+
+if [ "$PRUNE" -eq 1 ]; then
+    # Pruning is repo-wide whatever the refresh touched, so this walks every
+    # worktree rather than the plan.
+    PRUNEWORK="$TMPDIR_RUN/prunework"
+    list_worktrees >"$PRUNEWORK"
+    MAIN_WT=$(git worktree list --porcelain | awk '/^worktree /{print substr($0,10); exit}')
+    CWD=$(pwd -P)
+
+    while IFS="$TAB" read -r BRANCH DIR; do
+        [ -n "${DIR:-}" ] || continue
+        [ "$BRANCH" != "-" ] && [ "$BRANCH" != "$DEFAULT" ] || continue
+        [ "$DIR" != "$MAIN_WT" ] || continue
+        case "$CWD" in "$DIR"|"$DIR"/*) continue ;; esac
+
+        # Still on origin -> the branch is live, nothing to do.
+        ! git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null || continue
+
+        # branch.<name>.remote survives the remote branch being pruned, so it is
+        # the signal that this branch was pushed at some point. Never pushed
+        # means never merged, so there is nothing here to clean up.
+        [ -n "$(git config --get "branch.$BRANCH.remote" 2>/dev/null || true)" ] || continue
+
+        # The directory may already be gone: git calls such a worktree prunable,
+        # and there is then nothing to be dirty and only admin data to remove.
+        MISSING=0
+        if [ ! -d "$DIR" ]; then
+            MISSING=1
+        elif [ -n "$(git -C "$DIR" status --porcelain)" ]; then
+            printf '%s\n' "$(paint warn "$BRANCH: remote gone but the worktree has uncommitted work")" >&2
+            printf '%s\t%s\t%s\n' "$BRANCH" \
+                "remote branch gone, but this worktree still has changes" \
+                "cd $DIR && git status" >>"$NEEDS"
+            N_UNMERGED=$((N_UNMERGED + 1))
+            continue
+        fi
+
+        if ! is_merged "$BRANCH"; then
+            printf '%s\n' "$(paint warn "$BRANCH: remote gone with no sign it was merged")" >&2
+            printf '%s\t%s\t%s\n' "$BRANCH" \
+                "remote branch gone with no sign it was merged; review before removing" \
+                "git worktree remove $DIR && git branch -D $BRANCH" >>"$NEEDS"
+            N_UNMERGED=$((N_UNMERGED + 1))
+            continue
+        fi
+
+        [ "$MISSING" -eq 1 ] && VERB="stale record for" || VERB="worktree"
+
+        if [ "$DRY_RUN" -eq 1 ]; then
+            printf '%s\n' "$(paint "" "would remove $VERB $BRANCH ($REASON)" "$I_PRUNE")"
+            N_PRUNED=$((N_PRUNED + 1))
+            continue
+        fi
+
+        if [ "$MISSING" -eq 1 ]; then
+            git worktree prune
+        elif ! git worktree remove "$DIR" 2>/dev/null; then
+            printf '%s\n' "$(paint warn "$BRANCH: worktree remove failed, branch left alone")" >&2
+            printf '%s\t%s\t%s\n' "$BRANCH" \
+                "worktree could not be removed" \
+                "git worktree remove --force $DIR" >>"$NEEDS"
+            N_UNMERGED=$((N_UNMERGED + 1))
+            continue
+        fi
+        git branch -D "$BRANCH" >/dev/null 2>&1 || true
+        printf '%s\n' "$(paint ok "removed $BRANCH ($REASON)" "$I_PRUNE")"
+        N_PRUNED=$((N_PRUNED + 1))
+    done <"$PRUNEWORK"
+fi
+
+# ---- what happened ---------------------------------------------------------
+
+SUMMARY=""
+add_summary() { [ "$1" -gt 0 ] && SUMMARY="$SUMMARY, $1 $2"; return 0; }
+add_summary "$N_WOULD"      "to rebase"
+add_summary "$N_WOULDCLASH" "would conflict"
+add_summary "$N_SYNCED"     "synced"
+add_summary "$N_DIVERGED"   "diverged"
+add_summary "$N_REBASED"  "rebased"
+add_summary "$N_PUSHED"   "pushed"
+add_summary "$N_REFUSED"  "push refused"
+add_summary "$N_CURRENT"  "current"
+add_summary "$N_CONFLICT" "conflicted"
+add_summary "$N_DIRTY"    "dirty"
+add_summary "$N_NOBASE"   "no base"
+add_summary "$N_OTHER"    "other"
+[ "$DRY_RUN" -eq 1 ] && add_summary "$N_PRUNED" "to remove" || add_summary "$N_PRUNED" "removed"
+add_summary "$N_UNMERGED" "needing review"
+
+if [ "$STACK" -eq 1 ]; then
+    printf '\n%s in the %s stack: %s\n' "$N_TOTAL" "$STACK_ROOT" "${SUMMARY#, }"
+elif [ "$ALL" -eq 1 ]; then
+    printf '\n%s worktrees: %s\n' "$N_TOTAL" "${SUMMARY#, }"
+fi
+
+# Distinct branches, not a sum of counters: one branch can be both held back
+# from pruning and missing a base, and saying "4" for three branches is a lie.
+ATTENTION=$( { cut -f1 "$NEEDS"; cut -f1 "$NOBASE"; } 2>/dev/null | sort -u | grep -c . || true )
+if [ "$ALL" -eq 0 ]; then
+    # Which branch and which base are what you already knew by standing here.
+    # A dry run with nothing to report still owes you the base it picked.
+    LINE=$SINGLE_NOTE
+    LINESEV=$SINGLE_SEV
+    [ -n "$LINE" ] || { LINE="would rebase onto $SINGLE_BASE"; LINESEV=""; }
+    [ "$ATTENTION" -eq 0 ] || [ "$DOCTOR" -eq 1 ] \
+        || LINE="$LINE. run again with --doctor to see what to do"
+    printf '%s\n' "$(paint "$LINESEV" "$LINE")"
+    [ -z "$SINGLE_STASH_DIR" ] || stash_advice "$SINGLE_STASH_DIR"
+elif [ "$ATTENTION" -gt 0 ] && [ "$DOCTOR" -eq 0 ]; then
+    [ "$ATTENTION" -eq 1 ] && NEEDS_VERB=needs || NEEDS_VERB=need
+    printf '\n%s%s %s you; run again with --doctor to see what to do%s\n' \
+        "$C_HEAD" "$ATTENTION" "$NEEDS_VERB" "$C_OFF"
+fi
+
+# ---- --doctor --------------------------------------------------------------
+
+
+if [ "$DOCTOR" -eq 1 ] && [ "$ATTENTION" -gt 0 ]; then
+    printf '\n%s%s%s%s\n' "$C_HEAD" "$I_DOCTOR" "$(cut -f1 "$NEEDS" | head -1)" "$C_OFF"
+
+    while IFS="$TAB" read -r B DETAIL REMEDY FILES; do
+        [ -n "${REMEDY:-}" ] || continue
+        printf '\n  %s\n' "$DETAIL"
+        [ -z "${FILES:-}" ] || printf '%s\n' "$FILES" | tr '|' '\n' | grep . | sed 's/^/      /' 
+        printf '  → %s\n' "$REMEDY"
+    done <"$NEEDS"
+
+    # A branch with no base has usually finished rather than not started: its PR
+    # merged and the worktree outlived it. Worth one query to tell those apart,
+    # since "record a base" is the wrong advice for a branch that is done.
+    if [ -s "$NOBASE" ] && command -v gh >/dev/null 2>&1 && [ -n "${REPO:-}" ]; then
+        gh pr list -R "$REPO" --state all --limit 1000 \
+            --json headRefName,state,baseRefName \
+            --jq '.[] | [.headRefName, .state, .baseRefName] | @tsv' >"$ALLPRS" 2>/dev/null \
+            || : >"$ALLPRS"
+    fi
+
+    while IFS="$TAB" read -r B WTDIR; do
+        [ -n "${WTDIR:-}" ] || continue
+        # Already spoken for above. A branch whose worktree is being held back
+        # from pruning does not also need advice on recording its base.
+        if awk -F"$TAB" -v b="$B" '$1 == b { f = 1 } END { exit !f }' "$NEEDS"; then
+            continue
+        fi
+        PRSTATE=$(awk -F"$TAB" -v b="$B" '$1 == b { print $2; exit }' "$ALLPRS")
+        PRBASE=$(awk -F"$TAB" -v b="$B" '$1 == b { print $3; exit }' "$ALLPRS")
+        printf '\n  %s\n' "$B"
+        case "$PRSTATE" in
+            MERGED)
+                printf '      its PR merged into %s; the branch is finished\n' "$PRBASE"
+                printf '      git refresh --all --prune\n'
+                ;;
+            CLOSED)
+                printf '      its PR was closed without merging\n'
+                printf '      reopen the PR, or drop the worktree:\n'
+                printf '      git refresh --all --prune\n'
+                ;;
+            *)
+                GUESS=$(infer_base "$WTDIR" "$B")
+                printf '      never had a PR, and no base recorded when it was created\n'
+                printf '      open its PR, or record the base:\n'
+                printf '      git config branch.%s.base %s\n' "$B" "$GUESS"
+                printf '      (%s is a guess from the history; correct it if wrong)\n' "$GUESS"
+                ;;
+        esac
+    done <"$NOBASE"
+fi
+
+[ "$(( N_CONFLICT + N_REFUSED ))" -eq 0 ] || exit 1
