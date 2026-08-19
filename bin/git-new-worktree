@@ -126,12 +126,39 @@ if [ "$(git config --get core.bare || echo false)" != "true" ]; then
 
     # Conversion deletes the old checkout and lets `git worktree add` lay it
     # down again, so anything git is not tracking would not come back.
-    LEFTOVER=$(git status --porcelain --ignored | grep -c . || true)
+    LEFTOVER_LIST=$(git status --porcelain --ignored)
+    LEFTOVER=$(printf '%s\n' "$LEFTOVER_LIST" | grep -c . || true)
     if [ "$LEFTOVER" -gt 0 ]; then
-        printf '❌ %s untracked/ignored/modified files in this checkout\n' "$LEFTOVER" >&2
-        printf '   re-run this script after cleaning:\n' >&2
-        printf '     git clean -ndx    # review\n' >&2
-        printf '     git clean -fdx    # remove\n' >&2
+        [ "$LEFTOVER" -eq 1 ] && NOUN=path || NOUN=paths
+        printf '❌ %s untracked, ignored or modified %s in this checkout\n\n' \
+            "$LEFTOVER" "$NOUN" >&2
+        printf '     $ git status --porcelain --ignored   # what this counted\n' >&2
+        printf '%s\n' "$LEFTOVER_LIST" | head -5 | sed 's/^/     /' >&2
+        [ "$LEFTOVER" -le 5 ] \
+            || printf '     ... and %s more\n' "$((LEFTOVER - 5))" >&2
+        printf '\n' >&2
+
+        # Ignored paths are the half that surprises people: git status does not
+        # show them, so the checkout reads as clean while the conversion refuses.
+        # Saying so every time would put the explanation in front of people whose
+        # problem is an uncommitted edit, who will then skim it when it matters.
+        if printf '%s\n' "$LEFTOVER_LIST" | grep -q '^!!'; then
+            printf '   Ignored paths are considered but not shown by plain git status, causing\n' >&2
+            printf '   a checkout that looks clean but still stops the conversion. Conversion\n' >&2
+            printf '   is destructive to anything not tracked in git.\n\n' >&2
+            printf '   Manually preserve the ignored files or remove them.\n\n' >&2
+        else
+            printf '   Conversion is destructive to anything not tracked in git.\n\n' >&2
+        fi
+
+        # git clean is the remedy for untracked and ignored alike, and for
+        # neither of the tracked-modification cases.
+        if printf '%s\n' "$LEFTOVER_LIST" | grep -qE '^(\?\?|!!)'; then
+            printf '     git clean -ndx                     # review what would go\n' >&2
+            printf '     git clean -fdx                     # remove it\n' >&2
+        else
+            printf '   Commit or stash them, then re-run.\n' >&2
+        fi
         exit 1
     fi
 

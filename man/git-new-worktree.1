@@ -143,11 +143,21 @@ therefore
 .B requires a pristine checkout:
 no modified files, nothing untracked, nothing ignored, as judged by
 .BR "git status \-\-porcelain \-\-ignored" .
-Anything left over is refused with the
+Anything left over is refused, and the refusal lists what it counted \(em up to
+five entries, then a tally.
+.PP
+Note that plain
+.B "git status"
+does not show ignored paths, so a checkout it calls clean can still be refused.
+Where an ignored path is among the entries the refusal says so. Where anything
+untracked or ignored is present it offers
 .B "git clean \-ndx"
 and
 .B "git clean \-fdx"
-commands to review and remove it.
+to review and remove it; where only tracked modifications triggered the refusal
+it says to commit or stash them instead, since
+.B "git clean"
+would not touch them.
 .PP
 .BR \-f ", " \-\-force
 skips the interactive prompt.
