@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/gregswift/git-refresh/compare/v1.0.0...v1.0.1) (2026-08-19)
+
+
+### Fixes
+
+* **refresh:** stop reporting a divergence the same run resolved ([b38158b](https://github.com/gregswift/git-refresh/commit/b38158b8c7dc618304cf1e2d53aef2cd6872a536)), closes [#4](https://github.com/gregswift/git-refresh/issues/4)
+
 ## 1.0.0 (2026-08-19)
 
 
