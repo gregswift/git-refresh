@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/gregswift/git-refresh/compare/v1.1.0...v1.1.1) (2026-08-19)
+
+
+### Fixes
+
+* **refresh:** stop asking a missing worktree for its base ([a222cf5](https://github.com/gregswift/git-refresh/commit/a222cf572825b986a408fc8114a93ff1ea7c1a25)), closes [#10](https://github.com/gregswift/git-refresh/issues/10)
+
 ## [1.1.0](https://github.com/gregswift/git-refresh/compare/v1.0.1...v1.1.0) (2026-08-19)
 
 
