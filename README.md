@@ -102,6 +102,7 @@ The branch keeps its own name. Off by default, because turning it on does not mo
 * [WORKFLOWS.md](WORKFLOWS.md) \- the four workflows these implement: the layout, staying current, stacked pull requests, and housekeeping.
 * [TROUBLESHOOTING.md](TROUBLESHOOTING.md) \- what to do when a rebase conflicts, a push is refused, or a branch has no base.
 * [RECOMMENDATIONS.md](RECOMMENDATIONS.md) \- git settings that help, each with what it costs as well as what it buys. Start with the rerere section: `--all` and `--stack` disable rerere on purpose.
+* [CONTRIBUTING.md](CONTRIBUTING.md) \- how to run the tests, which documents a change has to update, and how commits are expected to read.
 
 ## Credit
 
