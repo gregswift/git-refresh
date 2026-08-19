@@ -32,7 +32,8 @@ setup: ## Install what check needs; does nothing where it is already there
 	@if command -v mandoc >/dev/null 2>&1; then \
 		echo "ok  mandoc already present"; \
 	elif command -v apt-get >/dev/null 2>&1; then \
-		sudo apt-get update -qq && sudo apt-get install -y -qq mandoc; \
+		DEBIAN_FRONTEND=noninteractive sudo -E apt-get -o DPkg::Lock::Timeout=60 update -qq \
+		&& DEBIAN_FRONTEND=noninteractive sudo -E apt-get -o DPkg::Lock::Timeout=60 install -y -qq mandoc; \
 	elif command -v brew >/dev/null 2>&1; then \
 		brew install mandoc; \
 	else \
