@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.5](https://github.com/gregswift/git-refresh/compare/v1.1.4...v1.1.5) (2026-08-19)
+
+
+### Fixes
+
+* **refresh:** read singular for one branch, and update the documented output ([d075d54](https://github.com/gregswift/git-refresh/commit/d075d548fa9fd7661555bfbd4cb3d8d5acbdfef8))
+
 ## [1.1.4](https://github.com/gregswift/git-refresh/compare/v1.1.3...v1.1.4) (2026-08-19)
 
 
