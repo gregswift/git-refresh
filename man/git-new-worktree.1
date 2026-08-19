@@ -215,6 +215,13 @@ means
 where that exists, falling back to any other ref of that name. Ignored when the
 branch already exists.
 .TP
+.BR \-\-normalize ", " \-\-no\-normalize
+Flatten the directory name, or do not, whatever
+.B refresh.normalizeWorktreeNames
+says. See
+.B NORMALIZED NAMES
+below.
+.TP
 .BR \-f ", " \-\-force
 Convert a plain clone to the worktree layout without asking. Skips the prompt,
 not the pristine\-checkout check.
@@ -228,6 +235,35 @@ End of options. The next arguments are
 and
 .IR base .
 .
+.SH NORMALIZED NAMES
+The layout is one directory per branch, directly under the repository. A branch
+name containing a
+.B /
+would nest instead, so the directory name can be flattened while the branch
+keeps its own name:
+.PP
+.EX
+git config refresh.normalizeWorktreeNames true
+gwt abc/add\-search\-filter    ->  <repo>/abc_add\-search\-filter/
+.EE
+.PP
+Off unless set.
+.B refresh.normalizeReplacement
+picks a single character other than
+.BR _ .
+Anything a ref may contain and a filename may not is replaced:
+.BR / ", " \e ", " : ", " * ", " ? ", " \(dq ", " < ", " > " and " | .
+.PP
+Two branches can flatten onto one directory:
+.B a/b
+and
+.B a_b
+both want
+.BR a_b .
+That is refused, naming the branch already there, rather than handing back a
+worktree for the wrong branch. Turning the setting on does not move worktrees
+that already exist, so a repository can hold both shapes.
+
 .SH ENVIRONMENT
 .TP
 .BR GIT_DIR ", " GIT_WORK_TREE ", " GIT_INDEX_FILE ", " GIT_PREFIX

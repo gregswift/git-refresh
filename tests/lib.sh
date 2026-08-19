@@ -54,6 +54,9 @@ fixture_new() {
     git -C "$REPO/.git" remote set-head origin --auto >/dev/null
     git -C "$REPO/.git" worktree add -q "$REPO/main" main
     git -C "$REPO/main" branch --set-upstream-to origin/main >/dev/null
+    # git reports resolved paths and macOS mktemp hands back a symlink, so an
+    # unresolved fixture path would pass on CI and fail on a laptop.
+    REPO=$(cd "$REPO" && pwd -P)
     : >"$1/prs"
     export GH_FIXTURE="$1/prs"
 }
