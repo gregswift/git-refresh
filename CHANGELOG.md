@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/gregswift/git-refresh/compare/v1.1.1...v1.1.2) (2026-08-19)
+
+
+### Fixes
+
+* **refresh:** remove one stale worktree record without taking the rest ([ea1f589](https://github.com/gregswift/git-refresh/commit/ea1f589f840ce51c47a5f5bb4951a09edfade6f5)), closes [#11](https://github.com/gregswift/git-refresh/issues/11)
+
 ## [1.1.1](https://github.com/gregswift/git-refresh/compare/v1.1.0...v1.1.1) (2026-08-19)
 
 
