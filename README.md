@@ -22,7 +22,8 @@ Three commands:
 
     4 worktrees: 1 synced, 1 pushed, 1 current, 1 conflicted
 
-    1 needs you; run again with --doctor to see what to do
+    1 needs you: old-spike
+    run git refresh --doctor in its worktree to see what to do
 
 `git refresh` works in an ordinary clone too. Single-branch mode never looks at the worktree layout.
 

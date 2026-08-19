@@ -238,7 +238,8 @@ If your repository squash merges, read [TROUBLESHOOTING.md](TROUBLESHOOTING.md#a
 
     4 worktrees: 1 synced, 1 pushed, 1 current, 1 conflicted
 
-    1 needs you; run again with --doctor to see what to do
+    1 needs you: old-spike
+    run git refresh --doctor in its worktree to see what to do
 
 An empty status means nothing to report: the branch will rebase and it will be fine. Each branch lands in exactly one bucket in the summary, so the counts add up to the number in front of them.
 
