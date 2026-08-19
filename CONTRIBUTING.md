@@ -41,6 +41,9 @@ Two rules matter more than coverage:
   command output, in tests or anywhere else. Build a fixture and read from
   that.
 
+[STYLE.md](STYLE.md) covers how a case is written: what it asserts, and how its
+labels read.
+
 Run one case by number while iterating: `tests/run-tests 08`.
 
 ## Documentation
