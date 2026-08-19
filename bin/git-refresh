@@ -549,7 +549,7 @@ infer_base() {  # $1 = worktree dir, $2 = branch
     _best=$DEFAULT
     _dist=$(git -C "$1" rev-list --count \
         "$(git -C "$1" merge-base "$DEFAULT" "$2" 2>/dev/null)..$2" 2>/dev/null) || _dist=""
-    _xsha=$(git -C "$1" rev-parse "$2")
+    _xsha=$(git -C "$1" rev-parse "$2" 2>/dev/null)
     while IFS="$TAB" read -r _cand _cdir; do
         [ -n "${_cdir:-}" ] || continue
         [ "$_cand" != "$2" ] && [ "$_cand" != "-" ] && [ "$_cand" != "$DEFAULT" ] || continue
@@ -613,6 +613,14 @@ resolve_base() {  # $1 = branch, $2 = worktree; prints "<base><TAB><why>", or no
 : >"$PLAN"
 while IFS="$TAB" read -r BRANCH DIR; do
     [ -n "${DIR:-}" ] || continue
+    # A worktree whose directory is gone has no base question to answer: the run
+    # either removes the record or says why it will not. Asking anyway walks
+    # infer_base into a directory that is not there, and files the branch as
+    # needing attention when nothing does.
+    if [ ! -d "$DIR" ]; then
+        printf '%s\t%s\t-\t%s\n' "$BRANCH" "$DIR" "worktree gone" >>"$PLAN"
+        continue
+    fi
     if [ -n "$BASE_ARG" ]; then
         printf '%s\t%s\t%s\t%s\n' "$BRANCH" "$DIR" "$BASE_ARG" "given" >>"$PLAN"
         continue
@@ -1119,9 +1127,21 @@ if [ "$PRUNE" -eq 1 ]; then
             continue
         fi
 
+        # `git worktree prune` is repository-wide: it clears the record of every
+        # prunable worktree at once, including the ones this run deliberately
+        # left alone, so an unmerged branch loses its record anyway and the
+        # `git worktree remove` suggested for it no longer has anything to act
+        # on. Removing this worktree by path touches only this one, and works
+        # whether or not the directory is still there.
+        REMOVED=0
         if [ "$MISSING" -eq 1 ]; then
-            git worktree prune
-        elif ! git worktree remove "$DIR" 2>/dev/null; then
+            # A directory that is already gone has nothing left to lose, and
+            # --force is what git wants for a worktree it cannot find.
+            git worktree remove --force "$DIR" 2>/dev/null && REMOVED=1
+        else
+            git worktree remove "$DIR" 2>/dev/null && REMOVED=1
+        fi
+        if [ "$REMOVED" -eq 0 ]; then
             printf '%s\n' "$(paint warn "$BRANCH: worktree remove failed, branch left alone")" >&2
             printf '%s\t%s\t%s\n' "$BRANCH" \
                 "worktree could not be removed" \
