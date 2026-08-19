@@ -1,0 +1,32 @@
+# Aliases for git-refresh. Include it rather than copying it, so renames and
+# additions reach you:
+#
+#     git config --global include.path /path/to/git-refresh/git/refresh.gitconfig
+#
+# or by hand in ~/.gitconfig:
+#
+#     [include]
+#         path = /path/to/git-refresh/git/refresh.gitconfig
+#
+# Everything here is additive. Nothing changes what an existing git command
+# already does; see RECOMMENDATIONS.md for the settings that do.
+
+[alias]
+	# Triage across every worktree, changing nothing. Predicts which branches
+	# will not replay cleanly and which worktrees are finished with.
+	check-trees = "!git-refresh --all --prune --dry-run"
+
+	# The same run, for real.
+	prune-trees = "!git-refresh --all --prune"
+
+	# commend and please are both Raphael Pinson's, from
+	# https://www.linkedin.com/posts/raphink_2-%F0%9D%90%86%F0%9D%90%A2%F0%9D%90%AD-%F0%9D%90%9A%F0%9D%90%A5%F0%9D%90%A2%F0%9D%90%9A%F0%9D%90%AC%F0%9D%90%9E%F0%9D%90%AC-%F0%9D%90%AD%F0%9D%90%A1%F0%9D%90%9A%F0%9D%90%AD-%F0%9D%90%AC%F0%9D%90%A2%F0%9D%90%A6%F0%9D%90%A9%F0%9D%90%A5%F0%9D%90%A2%F0%9D%90%9F%F0%9D%90%A2%F0%9D%90%9E%F0%9D%90%9D-activity-7297910317274050560-JwIM
+	#
+	# Fold staged changes into the last commit without reopening the message.
+	# The other half of a rebase workflow: you fix the commit that was wrong
+	# rather than append a commit apologising for it.
+	commend = commit --amend --no-edit
+
+	# Force-push that refuses if origin moved since you last saw it. What
+	# git-refresh --please does per branch, for the times you push by hand.
+	please = push --force-with-lease
