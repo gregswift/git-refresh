@@ -1,0 +1,72 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+# These govern the job's own GITHUB_TOKEN. release-please runs on the app token
+# below instead, but the block stays accurate so that removing the app leaves a
+# workflow that still works. issues:write is for labelling the release pull
+# request, which release-please does by default.
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-24.04
+
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+
+    steps:
+      # A pull request opened with GITHUB_TOKEN does not start other workflow
+      # runs, by design, so ci.yml would never report on the release pull
+      # request and it could never merge on green. An app token is not subject
+      # to that rule.
+      #
+      # Falls back to GITHUB_TOKEN where the app is not configured, so the
+      # release still happens; only the auto-merge and the dispatch are skipped.
+      - uses: actions/create-github-app-token@v3.2.0
+        id: app-token
+        if: vars.RELEASE_APP_CLIENT_ID != ''
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            git-refresh
+            homebrew-tap
+
+      - name: Run Release Please
+        id: release
+        uses: googleapis/release-please-action@v5.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # --repo is required. gh pr merge resolves the repository from the current
+      # git remote, not from the token, and this job deliberately does not check
+      # the repository out. Naming it is cheaper than a checkout to satisfy the
+      # CLI.
+      #
+      # --auto merges once the required checks pass rather than immediately, so
+      # the release lands on a green build or not at all. Needs "Allow
+      # auto-merge" on the repository.
+      - name: Merge the release pull request
+        if: steps.release.outputs.pr != '' && steps.app-token.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh pr merge --repo ${{ github.repository }} --auto --rebase ${{ fromJSON(steps.release.outputs.pr).number }}
+
+      # The tap points its formula at the newest release. It checks weekly on
+      # its own, so this only removes the wait; a missed dispatch costs a few
+      # days, not correctness.
+      - name: Tell the tap there is a release
+        if: steps.release.outputs.releases_created == 'true' && steps.app-token.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh workflow run bump.yml --repo ${{ github.repository_owner }}/homebrew-tap
