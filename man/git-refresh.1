@@ -1,0 +1,442 @@
+.\" Manual page for git-refresh.
+.\" Hand-written roff. There is no generator; edit this file directly.
+.TH GIT\-REFRESH 1 "2026-08-18" "git-refresh" "Git Extras"
+.
+.SH NAME
+git\-refresh \- fetch, sync the fork, and rebase each branch onto the right base
+.
+.SH SYNOPSIS
+.B git refresh
+.RI [ base ]
+.RB [ \-i ]
+.RB [ \-n ]
+.RB [ \-v ]
+.RB [ \-\-all | \-\-stack ]
+.RB [ \-\-please ]
+.RB [ \-\-prune ]
+.RB [ \-\-sync ]
+.RB [ \-\-doctor ]
+.RB [ \-\-no\-icons ]
+.RB [ \-\-color [ =\c
+.IR when ]]
+.br
+.B git refresh
+.B \-h
+.PP
+Also installed as
+.BR git\-refresh ,
+and reachable as
+.B git refresh
+without an alias: git looks for a
+.B git\-refresh
+in
+.B PATH
+before it consults aliases.
+.
+.SH DESCRIPTION
+.B git refresh
+fetches every remote, fast\-forwards origin's default branch from
+.BR upstream 's
+when an
+.B upstream
+remote exists, works out the base each branch belongs on, and rebases onto it.
+.PP
+The right base for a branch is the target of its open pull request, not
+.IR origin/ <same\-name>.
+A branch stacked on another therefore lands on the branch below it rather than
+flattening onto the default branch. Where no pull request exists yet, the base
+recorded by
+.BR git\-new\-worktree (1)
+in
+.IB branch. <name> .base
+stands in.
+.PP
+Bases are resolved in this order, first hit wins:
+.IP 1. 4
+The base branch of the branch's open pull request, read with
+.BR gh (1).
+This is the authority once a pull request exists.
+.IP 2. 4
+.IB branch. <name> .base
+from git config. If that branch is gone from origin \(em merged and deleted
+while you worked \(em it is followed one hop to whatever it merged into.
+.IP 3. 4
+The default branch. On a single branch this is assumed outright; under
+.B \-\-all
+it is assumed only where the shape of the history agrees, because guessing
+wrong there flattens a whole unopened stack onto the default branch.
+.PP
+A branch none of those answer for is reported as
+.B "no base"
+and left alone;
+.B \-\-doctor
+says which piece is missing and offers the command that records it.
+.PP
+Every rebase targets
+.IR origin/ <base>,
+never a local branch of the same name. That is why a stack needs its lower
+branches pushed before the ones above them land on anything new, and why
+.B \-\-all
+sorts branches topologically by base and processes them bottom\-up.
+.PP
+One branch is refreshed by default: the one you are standing in.
+.B \-\-all
+does every worktree and is assumed at the bare repository root, where there is
+no branch the command could mean. Single\-branch mode never looks at the
+worktree layout, so an ordinary clone behaves exactly like a worktree checkout.
+.PP
+.B \-\-all
+and
+.B \-\-stack
+run every rebase with
+.B rerere.enabled=false
+whatever your config says: those rebases are speculative and are thrown away the
+moment they conflict, so they have no business recording a resolution you never
+reviewed or replaying one across twenty branches unattended. On a single branch
+rerere is left exactly as you configured it.
+.PP
+Conflicts are handled differently in the two modes. Under
+.B \-\-all
+or
+.B \-\-stack
+a conflicting rebase is aborted and handed back as a command to run, so a pass
+over twenty worktrees cannot leave six of them wedged mid\-rebase. On a single
+branch the conflict is left in place to resolve, since aborting would only mean
+running the identical rebase by hand to reach the identical conflict.
+.
+.SH OPTIONS
+.TP
+.I base
+Rebase onto this instead of the resolved base. A bare name is looked up under
+origin first, so
+.B git refresh foo
+means
+.BR origin/foo .
+One branch only; it is an error alongside
+.B \-\-all
+or
+.BR \-\-stack .
+.TP
+.B \-\-all
+Refresh every worktree, in stack order. Assumed at the bare repository root.
+.TP
+.B \-\-stack
+Refresh only the branches stacked with this one, reached through pull request
+bases in both directions and processed bottom\-up. The branches above are
+included because they are the ones a rebase here would strand. Requires a
+worktree to start from, and cannot be combined with
+.BR \-\-all .
+.TP
+.BR \-i ", " \-\-interactive
+Follow the rebase with an interactive pass from the merge base. One branch only.
+.TP
+.BR \-n ", " \-\-dry\-run
+Show what would happen. The fetch still runs \(em with stale remote\-tracking
+refs a dry run would answer about the origin of the last real fetch \(em but
+nothing else moves: no rebase, no push, no worktree removed, and origin's
+default branch is not fast\-forwarded from upstream. Conflicts are predicted
+with
+.B "git merge\-tree"
+rather than met.
+.TP
+.BR \-v ", " \-\-verbose
+Print git's own fetch, rebase and push output as well as the table.
+.TP
+.BR \-\-push\-with\-lease ", " \-\-please
+Push each branch this run rebased, refusing any push that would discard commits
+you have not seen. On by default; see
+.B CONFIGURATION
+and
+.BR NOTES .
+.TP
+.BR \-\-no\-push\-with\-lease ", " \-\-no\-please
+Do not push. Overrides
+.BR refresh.pushWithLease .
+.TP
+.B \-\-prune
+Remove worktrees whose branch is gone from origin and shows evidence of having
+been merged, and delete the branch with them. Never touches a worktree with
+changes, the one you are standing in, the main worktree, the default branch, or
+one with no sign of having been merged; those are reported instead. A branch
+that was never pushed is never pruned. Off by default.
+.TP
+.B \-\-no\-prune
+Do not prune. Overrides
+.BR refresh.pruneWorktrees .
+.TP
+.B \-\-sync
+Adopt
+.IR origin/ <branch>
+before rebasing, for a branch that was rewritten elsewhere and holds nothing
+origin lacks. It is replayed onto the remote rather than reset onto it, so work
+is not lost even where that judgement is wrong. A branch with commits of its own
+under a rewritten remote is reported as
+.B "diverged from origin"
+and left alone. On by default.
+.TP
+.B \-\-no\-sync
+Do not adopt the remote. Overrides
+.BR refresh.syncStale .
+.TP
+.B \-\-doctor
+Recommend what to do about everything the run reported: conflicting files by
+name, unpushed commits by subject, branches with no base, and worktrees held
+back from pruning. Implies
+.BR \-\-dry\-run ,
+so a conflict is predicted rather than met. Diagnoses one branch; it is an error
+alongside
+.B \-\-all
+or
+.BR \-\-stack ,
+and it needs a worktree to stand in.
+.TP
+.B \-\-icons
+Use emoji in the status column and the messages. On by default.
+.TP
+.B \-\-no\-icons
+Drop the emoji. Overrides
+.BR refresh.icons .
+Severity is still carried by colour and by the words themselves.
+.TP
+.BI \-\-color [ =when ]
+Colour the status column by severity.
+.I when
+is
+.B auto
+(a terminal only, with
+.B NO_COLOR
+unset and
+.B TERM
+not
+.BR dumb ),
+.BR always ,
+or
+.BR never .
+Bare
+.B \-\-color
+means
+.BR always .
+.TP
+.B \-\-no\-color
+Same as
+.BR \-\-color=never .
+.TP
+.BR \-h ", " \-\-help
+Print the usage summary and exit 0.
+.TP
+.B \-\-
+End of options. The next argument is taken as
+.IR base .
+.
+.SH CONFIGURATION
+Command line first, then git config, then the default below. An explicit
+.BI \-\-no\- x
+always wins over config.
+.PP
+A key that is set to something git cannot read as a boolean is a fatal error,
+not a silent "off". That is deliberate for
+.BR refresh.pruneWorktrees ,
+where a typo would otherwise quietly disable a setting that removes worktrees.
+.TP
+.B refresh.pushWithLease
+Boolean.
+.BR "Default true" :
+pushing happens unless the key is set
+.BR false .
+Same as
+.BR \-\-please ;
+turn it off for one run with
+.BR \-\-no\-please .
+.TP
+.B refresh.syncStale
+Boolean.
+.BR "Default true" .
+Same as
+.BR \-\-sync ;
+.B \-\-no\-sync
+for one run.
+.TP
+.B refresh.pruneWorktrees
+Boolean.
+.BR "Default false" ,
+because pruning removes worktrees and deletes their branches. Same as
+.BR \-\-prune ;
+.B \-\-no\-prune
+for one run.
+.TP
+.B refresh.icons
+Boolean.
+.BR "Default true" .
+Same as
+.BR \-\-icons ;
+.B \-\-no\-icons
+for one run.
+.TP
+.B color.refresh
+.BR auto ", " always " or " never .
+.BR "Default auto" .
+Same as
+.BR \-\-color= when.
+.TP
+.B rebase.autoStash
+Boolean, git's own key, not one of this tool's.
+.BR "Default false" ,
+as git defines it, and
+.B honoured
+here: with it set
+.BR true ,
+a worktree with uncommitted tracked changes is rebased anyway and git stashes
+and reapplies them, instead of the branch being skipped under
+.B \-\-all
+or refused on a single branch. If reapplying the stash conflicts, the branch is
+reported as
+.B "autostash conflicted"
+and the changes are left conflicted in the worktree \(em they are still in the
+stash too, so drop it once they are resolved.
+.TP
+.BI branch. <name> .base
+The base recorded by
+.BR git\-new\-worktree (1)
+when it created the branch, and the fallback used when the branch has no open
+pull request. Safe to set by hand:
+.B "git config branch.<name>.base main"
+.TP
+.BI branch. <name> .remote
+Read by
+.B \-\-prune
+only. It survives the remote branch being deleted, so it is the evidence that a
+branch was pushed at some point; a branch without it is never pruned.
+.
+.SH ENVIRONMENT
+.TP
+.B NO_COLOR
+If set to anything,
+.B \-\-color=auto
+produces no colour.
+.TP
+.B TERM
+.B dumb
+(or unset) disables colour under
+.BR \-\-color=auto .
+.TP
+.BR GIT_DIR ", " GIT_WORK_TREE ", " GIT_INDEX_FILE ", " GIT_PREFIX
+Unset before anything else runs. The git alias entry point exports
+.B GIT_DIR
+pointing at whichever worktree git was invoked from, which would otherwise
+retarget every git call in the run.
+.
+.SH FILES
+.TP
+.IB repo /.git
+The bare repository, when the worktree layout is in use. Worktrees are its
+siblings,
+.IB repo / <branch>\fR.
+.TP
+.I $TMPDIR
+A temporary directory is created per run for the plan and the per\-branch
+findings, and removed on exit.
+.
+.SH EXIT STATUS
+.TP
+.B 0
+Everything the run touched is on its base.
+.TP
+.B 1
+A rebase conflicted or a push was refused. Also the status of any fatal error:
+not inside a repository, more than one base given, a config value that is not a
+boolean, an unresolvable
+.BR origin/HEAD ,
+or a flag combination that names two different sets of branches.
+.TP
+.B 2
+Usage error: an unknown option.
+.PP
+Suitable for a
+.B &&
+chain or a CI step.
+.
+.SH EXAMPLES
+Rebase the branch you are standing in onto its base, and push it:
+.PP
+.EX
+git refresh
+.EE
+.PP
+Look at every worktree without changing anything:
+.PP
+.EX
+git refresh \-\-all \-\-dry\-run
+.EE
+.PP
+Restack one chain of pull requests, bottom\-up, pushing as it goes:
+.PP
+.EX
+cd add\-billing\-writes
+git refresh \-\-stack \-\-please
+.EE
+.PP
+Find out what to do about the branch you are on:
+.PP
+.EX
+git refresh \-\-doctor
+.EE
+.PP
+Refresh every worktree and clear out the ones that are finished:
+.PP
+.EX
+git refresh \-\-all \-\-prune
+.EE
+.PP
+Rebase onto a base of your choosing rather than the resolved one:
+.PP
+.EX
+git refresh main
+.EE
+.PP
+Make pruning the default, and turn it off for one run:
+.PP
+.EX
+git config \-\-global refresh.pruneWorktrees true
+git refresh \-\-all \-\-no\-prune
+.EE
+.
+.SH NOTES
+.SS Why the lease is explicit
+A rebase rewrites every commit, so publishing one means force\-pushing. Bare
+.B \-\-force\-with\-lease
+is vacuous here: it checks the push against the remote\-tracking ref that the
+fetch at the top of this run has just updated, so it would approve overwriting a
+colleague's commit that arrived in that very fetch.
+.B \-\-force\-if\-includes
+is no help either \(em it reads a branch reflog, and a bare repository keeps
+none.
+.B \-\-please
+therefore snapshots where each branch stood on origin
+.I before
+the fetch and pushes with that value as the lease. If someone pushed in between,
+the push is refused and reported.
+.SS Squash merges
+When a base branch is squash\-merged, nothing git has for recognising "this work
+is already upstream" survives: patch\-ids differ, ancestry is broken, and both
+tips carry the same change by different routes. The branch above it will replay
+its parent's commits onto a base that already contains their content. The fix is
+.B "git rebase \-\-onto"
+by hand and, upstream of the tooling, enabling rebase merges on the repository.
+Expect
+.B \-\-doctor
+to be optimistic about such a branch: it merges tips, and a squashed base looks
+clean right up until the rebase replays.
+.
+.SH SEE ALSO
+.BR git\-new\-worktree (1),
+.BR git\-clone\-for\-worktrees (1),
+.BR git\-worktree (1),
+.BR git\-rebase (1),
+.BR git\-push (1),
+.BR git\-rerere (1),
+.BR gh (1)
+.
+.SH AUTHORS
+Greg Swift. The worktree layout and the idea of solving it with a handful of
+small scripts come from Christopher Allen's
+.IR "Git Worktree Best Practices and Tools" .
