@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.8](https://github.com/gregswift/git-refresh/compare/v1.1.7...v1.1.8) (2026-08-20)
+
+
+### Fixes
+
+* **ci:** bound the apt call, and fail rather than hang ([73fafb9](https://github.com/gregswift/git-refresh/commit/73fafb905b0efd43459cdeb0d10bca67e834501b))
+
 ## [1.1.7](https://github.com/gregswift/git-refresh/compare/v1.1.6...v1.1.7) (2026-08-19)
 
 
