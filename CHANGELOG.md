@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.9](https://github.com/gregswift/git-refresh/compare/v1.1.8...v1.1.9) (2026-08-26)
+
+
+### Fixes
+
+* stop counting pruned worktrees as needing attention ([22a07bd](https://github.com/gregswift/git-refresh/commit/22a07bd3f23b51958a506cf794133cea6fcd327a))
+
 ## [1.1.8](https://github.com/gregswift/git-refresh/compare/v1.1.7...v1.1.8) (2026-08-20)
 
 
