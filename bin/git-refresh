@@ -737,13 +737,22 @@ N_REBASED=0; N_CURRENT=0; N_CONFLICT=0; N_DIRTY=0; N_NOBASE=0; N_OTHER=0
 N_TOTAL=0; N_WOULD=0; N_PUSHED=0; N_REFUSED=0; N_WOULDCLASH=0
 N_SYNCED=0; N_DIVERGED=0
 
+# Count $BRANCH under bucket $1, and remember which, so a later prune can
+# un-count it.
+BUCKETS="$TMPDIR_RUN/buckets"; : >"$BUCKETS"
+bucket() {
+    _n=$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')
+    eval "N_$_n=\$((N_$_n + 1))"
+    printf '%s\t%s\n' "$BRANCH" "$1" >>"$BUCKETS"
+}
+
 while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
     [ -n "${DIR:-}" ] || continue
     N_TOTAL=$((N_TOTAL + 1))
 
     if [ "$BRANCH" = "-" ]; then
         row "$(basename "$DIR")" "-" skip "detached"
-        N_OTHER=$((N_OTHER + 1)); continue
+        bucket other; continue
     fi
     if [ ! -d "$DIR" ]; then
         # --prune clears the record itself, but only for a branch already gone
@@ -758,11 +767,11 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
                 "the worktree directory is gone, but the branch is still on origin" \
                 "git worktree prune" >>"$NEEDS"
         fi
-        N_OTHER=$((N_OTHER + 1)); continue
+        bucket other; continue
     fi
     if [ "$BASE" = "-" ]; then
         row "$BRANCH" "-" skip "no base"
-        N_NOBASE=$((N_NOBASE + 1)); continue
+        bucket nobase; continue
     fi
 
     # Untracked files are none of a rebase's business; tracked changes are.
@@ -778,7 +787,7 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
         printf '%s\t%s\t%s\n' "$BRANCH" \
             "$COUNT uncommitted change(s), so it was left alone" \
             "cd $DIR && git status" >>"$NEEDS"
-        N_DIRTY=$((N_DIRTY + 1)); continue
+        bucket dirty; continue
     fi
 
     if git rev-parse --verify --quiet "refs/remotes/origin/$BASE" >/dev/null; then
@@ -788,7 +797,7 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
     else
         row "$BRANCH" "$BASE" skip "no base"
         printf '%s\t%s\n' "$BRANCH" "$DIR" >>"$NOBASE"
-        N_NOBASE=$((N_NOBASE + 1)); continue
+        bucket nobase; continue
     fi
 
     # The ref as it is actually used. Every rebase here targets the remote
@@ -856,7 +865,7 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
                 printf '%s\t%s\t%s\n' "$BRANCH" \
                     "could not be replayed onto origin/$BRANCH" \
                     "cd $DIR && git pull --rebase" >>"$NEEDS"
-                N_DIVERGED=$((N_DIVERGED + 1))
+                bucket diverged
             fi
         fi
     fi
@@ -882,7 +891,7 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
                 "would conflict in $NFILES $NOUN against $REF" \
                 "git rebase $REF   to do it now and resolve them" \
                 "$SAMPLE" >>"$NEEDS"
-            N_WOULDCLASH=$((N_WOULDCLASH + 1))
+            bucket wouldclash
         else
             # The table has a column for the base; one branch has only the
             # sentence, and a dry run that reports an extra must not lose the
@@ -892,7 +901,7 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
             else
                 note_row "$BRANCH" "$BASEDISP" "" "would rebase onto $BASEDISP"
             fi
-            N_WOULD=$((N_WOULD + 1))
+            bucket would
         fi
         report_unpushed
         flush_divergence "$DIR" "$BRANCH"
@@ -909,7 +918,7 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
         # only you can settle it.
         if grep -q 'Applying autostash resulted in conflicts' "$OUT"; then
             STASHNOTE="autostash conflicted"
-            N_DIRTY=$((N_DIRTY + 1))
+            bucket dirty
         else
             STASHNOTE=""
         fi
@@ -969,11 +978,11 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
         # the sync stays a note on the row.
         if [ "$BUCKET" = current ] && [ "$SYNCED" -eq 1 ]; then BUCKET=synced; fi
         case "$BUCKET" in
-            current) N_CURRENT=$((N_CURRENT + 1)) ;;
-            synced)  N_SYNCED=$((N_SYNCED + 1)) ;;
-            rebased) N_REBASED=$((N_REBASED + 1)) ;;
-            pushed)  N_PUSHED=$((N_PUSHED + 1)) ;;
-            refused) N_REFUSED=$((N_REFUSED + 1)) ;;
+            current) bucket current ;;
+            synced)  bucket synced ;;
+            rebased) bucket rebased ;;
+            pushed)  bucket pushed ;;
+            refused) bucket refused ;;
         esac
 
         UNPUSHED=$(unpushed_note "$DIR" "$BRANCH" "$REF")
@@ -1029,7 +1038,7 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
             fi
         fi
         flush_divergence "$DIR" "$BRANCH"
-        N_CONFLICT=$((N_CONFLICT + 1))
+        bucket conflict
         [ "$VERBOSE" -eq 1 ] && cat "$OUT"
     fi
 done <"$PLAN"
@@ -1068,6 +1077,18 @@ is_merged() {
 }
 
 N_PRUNED=0; N_UNMERGED=0
+
+# Forget branch $1: a removed worktree needs nothing from you, and was not,
+# in the end, a push refused or a branch with no base.
+forget_needs() {
+    for _f in "$NEEDS" "$NOBASE"; do
+        awk -F"$TAB" -v b="$1" '$1 != b' "$_f" >"$_f.keep" && mv "$_f.keep" "$_f"
+    done
+    for _b in $(awk -F"$TAB" -v b="$1" '$1 == b { print $2 }' "$BUCKETS"); do
+        _n=$(printf '%s' "$_b" | tr '[:lower:]' '[:upper:]')
+        eval "N_$_n=\$((N_$_n - 1))"
+    done
+}
 
 if [ "$PRUNE" -eq 1 ]; then
     # Pruning is repo-wide whatever the refresh touched, so this walks every
@@ -1147,6 +1168,7 @@ if [ "$PRUNE" -eq 1 ]; then
         git branch -D "$BRANCH" >/dev/null 2>&1 || true
         printf '%s\n' "$(paint ok "removed $BRANCH ($REASON)" "$I_PRUNE")"
         N_PRUNED=$((N_PRUNED + 1))
+        forget_needs "$BRANCH"
     done <"$PRUNEWORK"
 fi
 
