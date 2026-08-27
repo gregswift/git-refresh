@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.10](https://github.com/gregswift/git-refresh/compare/v1.1.9...v1.1.10) (2026-08-27)
+
+
+### Documentation
+
+* state that refresh works with any worktree arrangement ([b1ac907](https://github.com/gregswift/git-refresh/commit/b1ac9071de247832d8333ab73a94d28b0bf86ad6))
+
 ## [1.1.9](https://github.com/gregswift/git-refresh/compare/v1.1.8...v1.1.9) (2026-08-26)
 
 
