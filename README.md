@@ -25,7 +25,7 @@ Three commands:
     1 needs you: old-spike
     run git refresh --doctor in its worktree to see what to do
 
-`git refresh` works in an ordinary clone too. Single-branch mode never looks at the worktree layout.
+`git refresh` does not require this layout. Single-branch mode never looks at how the repository is arranged, so an ordinary clone behaves the same. `--all` finds its worktrees with `git worktree list`, so it walks worktrees you made yourself with plain `git worktree add`, wherever you put them. Only `git clone-for-worktrees` and `git new-worktree` decide where a directory goes.
 
 ## Install
 

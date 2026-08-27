@@ -85,6 +85,18 @@ does every worktree and is assumed at the bare repository root, where there is
 no branch the command could mean. Single\-branch mode never looks at the
 worktree layout, so an ordinary clone behaves exactly like a worktree checkout.
 .PP
+Neither mode requires the layout the companion scripts create.
+.B \-\-all
+finds its worktrees with
+.BR "git worktree list" ,
+so it walks any arrangement, including worktrees made with plain
+.B "git worktree add"
+and placed wherever you chose. Only
+.B git\-clone\-for\-worktrees
+and
+.B git\-new\-worktree
+decide where a directory goes.
+.PP
 .B \-\-all
 and
 .B \-\-stack
