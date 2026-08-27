@@ -39,6 +39,8 @@ Plain `git worktree` leaves the placement of those directories to you, and the c
 
 The repository becomes a directory of branches. Nothing is nested inside anything else, and each directory is named for the branch in it.
 
+`git refresh` does not depend on any of this. It finds worktrees with `git worktree list`, so it walks whatever arrangement a repository already has: one directory per branch under a bare repository, worktrees scattered beside a plain clone, or no worktrees at all. Only `git clone-for-worktrees` and `git new-worktree` decide where a directory goes. Adopt the layout for the reasons above, not because the refresh needs it.
+
 
 What is added here is everything about *where a branch should land*, and what to do when it cannot:
 
