@@ -746,7 +746,10 @@ bucket() {
     printf '%s\t%s\n' "$BRANCH" "$1" >>"$BUCKETS"
 }
 
-while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
+# The plan is read on fd 3, not stdin. -i hands the terminal to git rebase,
+# which hands it to the editor; a loop reading the plan on stdin leaves the
+# editor with a file to read from and it refuses to start.
+while IFS="$TAB" read -r BRANCH DIR BASE WHY <&3; do
     [ -n "${DIR:-}" ] || continue
     N_TOTAL=$((N_TOTAL + 1))
 
@@ -1041,7 +1044,7 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY; do
         bucket conflict
         [ "$VERBOSE" -eq 1 ] && cat "$OUT"
     fi
-done <"$PLAN"
+done 3<"$PLAN"
 
 # ---- clear out what is finished --------------------------------------------
 
