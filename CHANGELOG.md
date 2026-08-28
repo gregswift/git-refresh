@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.11](https://github.com/gregswift/git-refresh/compare/v1.1.10...v1.1.11) (2026-08-28)
+
+
+### Fixes
+
+* give the editor a terminal during git refresh -i ([661bf9a](https://github.com/gregswift/git-refresh/commit/661bf9a3b068104059f43a1db850a8743b9729a6))
+
 ## [1.1.10](https://github.com/gregswift/git-refresh/compare/v1.1.9...v1.1.10) (2026-08-27)
 
 
