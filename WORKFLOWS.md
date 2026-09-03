@@ -162,6 +162,8 @@ The point is not that the window is large. On a branch only you touch, fetch to 
 
 Under `--all`, only branches that moved, or that hold commits origin does not have, are pushed. A run over twenty worktrees should not fire off twenty pushes.
 
+Two branches are held back even then. One that rebased down to exactly its base has nothing of its own left to publish. One that origin no longer carries was dropped when its pull request merged or closed, and pushing it back recreates what that cleanup removed — which also stops `--prune` from removing the worktree, because it skips any branch still on origin. Name either branch on its own and it is pushed: you asked for that one.
+
 This is on by default. `--no-please` turns it off for one run, `git config refresh.pushWithLease false` for good.
 
 ## When the branch was rewritten somewhere else
