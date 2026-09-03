@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.12](https://github.com/gregswift/git-refresh/compare/v1.1.11...v1.1.12) (2026-09-03)
+
+
+### Fixes
+
+* advise a branch whose worktree is gone in the summary itself ([deb883d](https://github.com/gregswift/git-refresh/commit/deb883daa5d37800905414acf37887763abc7eb6))
+
 ## [1.1.11](https://github.com/gregswift/git-refresh/compare/v1.1.10...v1.1.11) (2026-08-28)
 
 
