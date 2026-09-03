@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.13](https://github.com/gregswift/git-refresh/compare/v1.1.12...v1.1.13) (2026-09-03)
+
+
+### Fixes
+
+* hold back a push to an origin that dropped the branch ([895771c](https://github.com/gregswift/git-refresh/commit/895771ce075a796ee8eac43ffcd8a75dc8a83520))
+
 ## [1.1.12](https://github.com/gregswift/git-refresh/compare/v1.1.11...v1.1.12) (2026-09-03)
 
 
