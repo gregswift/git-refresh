@@ -1177,6 +1177,18 @@ fi
 
 # ---- what happened ---------------------------------------------------------
 
+# Print every NEEDS entry for branch $1: what is wrong, the files or commits
+# behind it, and the command that settles it.
+needs_advice() {
+    awk -F"$TAB" -v b="$1" '$1 == b' "$NEEDS" \
+    | while IFS="$TAB" read -r _b _detail _remedy _files; do
+        [ -n "${_remedy:-}" ] || continue
+        printf '\n  %s\n' "$_detail"
+        [ -z "${_files:-}" ] || printf '%s\n' "$_files" | tr '|' '\n' | grep . | sed 's/^/      /'
+        printf '  → %s\n' "$_remedy"
+    done
+}
+
 SUMMARY=""
 add_summary() { [ "$1" -gt 0 ] && SUMMARY="$SUMMARY, $1 $2"; return 0; }
 add_summary "$N_WOULD"      "to rebase"
@@ -1232,14 +1244,9 @@ fi
 
 
 if [ "$DOCTOR" -eq 1 ] && [ "$ATTENTION" -gt 0 ]; then
-    printf '\n%s%s%s%s\n' "$C_HEAD" "$I_DOCTOR" "$(cut -f1 "$NEEDS" | head -1)" "$C_OFF"
-
-    while IFS="$TAB" read -r B DETAIL REMEDY FILES; do
-        [ -n "${REMEDY:-}" ] || continue
-        printf '\n  %s\n' "$DETAIL"
-        [ -z "${FILES:-}" ] || printf '%s\n' "$FILES" | tr '|' '\n' | grep . | sed 's/^/      /' 
-        printf '  → %s\n' "$REMEDY"
-    done <"$NEEDS"
+    DOCTOR_B=$(cut -f1 "$NEEDS" | head -1)
+    printf '\n%s%s%s%s\n' "$C_HEAD" "$I_DOCTOR" "$DOCTOR_B" "$C_OFF"
+    needs_advice "$DOCTOR_B"
 
     # A branch with no base has usually finished rather than not started: its PR
     # merged and the worktree outlived it. Worth one query to tell those apart,
