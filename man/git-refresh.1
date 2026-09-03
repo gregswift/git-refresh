@@ -200,7 +200,11 @@ alongside
 .B \-\-all
 or
 .BR \-\-stack ,
-and it needs a worktree to stand in.
+and it needs a worktree to stand in. A branch whose worktree directory is gone
+offers nowhere to stand, so
+.B \-\-all
+prints that branch's advice in the summary rather than naming a command you
+cannot run.
 .TP
 .B \-\-icons
 Use emoji in the status column and the messages. On by default.

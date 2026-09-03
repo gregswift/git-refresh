@@ -1230,14 +1230,34 @@ elif [ "$ATTENTION" -gt 0 ] && [ "$DOCTOR" -eq 0 ]; then
     # --doctor diagnoses the branch you are standing in and refuses --all, so
     # "run again with --doctor" is advice this run cannot take. Name the
     # branches instead, and say where the command has to be run.
-    ATTN_LIST=$( { cut -f1 "$NEEDS"; cut -f1 "$NOBASE"; } 2>/dev/null \
-        | sort -u | grep . | head -5 | paste -sd, - | sed 's/,/, /g')
+    ATTN="$TMPDIR_RUN/attn"
+    { cut -f1 "$NEEDS"; cut -f1 "$NOBASE"; } 2>/dev/null | sort -u | grep . >"$ATTN" || true
+    ATTN_LIST=$(head -5 "$ATTN" | paste -sd, - | sed 's/,/, /g')
     [ "$ATTENTION" -le 5 ] || ATTN_LIST="$ATTN_LIST and $((ATTENTION - 5)) more"
     printf '\n%s%s %s you: %s%s\n' \
         "$C_HEAD" "$ATTENTION" "$NEEDS_VERB" "$ATTN_LIST" "$C_OFF"
-    [ "$ATTENTION" -eq 1 ] && WHERE="in its worktree" || WHERE="in one of their worktrees"
-    printf '%srun git refresh --doctor %s to see what to do%s\n' \
-        "$C_HEAD" "$WHERE" "$C_OFF"
+
+    # --doctor has to be run inside the worktree it diagnoses, and a worktree
+    # whose directory is gone leaves nowhere to stand. Sending you there would
+    # name a directory that is not there, so say the remedy here instead.
+    STANDING="$TMPDIR_RUN/standing"
+    list_worktrees | while IFS="$TAB" read -r _b _d; do
+        [ ! -d "$_d" ] || printf '%s\n' "$_b"
+    done >"$STANDING"
+    grep -Fxv -f "$STANDING" "$ATTN" >"$ATTN.gone" || true
+    while read -r ATTN_B; do
+        [ -n "${ATTN_B:-}" ] || continue
+        printf '\n%s%s%s%s\n' "$C_HEAD" "$I_DOCTOR" "$ATTN_B" "$C_OFF"
+        needs_advice "$ATTN_B"
+    done <"$ATTN.gone"
+
+    HERE=$(grep -Fx -f "$STANDING" "$ATTN" | grep -c . || true)
+    if [ "$HERE" -gt 0 ]; then
+        [ ! -s "$ATTN.gone" ] || printf '\n'
+        [ "$HERE" -eq 1 ] && WHERE="in its worktree" || WHERE="in one of their worktrees"
+        printf '%srun git refresh --doctor %s to see what to do%s\n' \
+            "$C_HEAD" "$WHERE" "$C_OFF"
+    fi
 fi
 
 # ---- --doctor --------------------------------------------------------------
