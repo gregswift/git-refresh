@@ -73,7 +73,9 @@ Options:
                   their rebases are speculative. One branch honours your config.
   --push-with-lease, --please
                   Push each branch this run rebased, refusing any push that
-                  would discard commits you have not seen.
+                  would discard commits you have not seen. Under --all a branch
+                  with no commits of its own, and one origin no longer carries,
+                  are both held back.
   --prune         Remove worktrees whose branch is gone from origin and was
                   merged. Never touches one with changes, one you are standing
                   in, or one with no sign of having been merged.
@@ -316,6 +318,14 @@ list_worktrees() {
 # Anything this run is not acting on belongs to --doctor.
 BRANCH_W=24
 BASE_W=16
+# True when origin carried this branch and no longer does. The record of a past
+# push survives the remote branch being deleted, so the record and the missing
+# ref together say published, then dropped. A branch never pushed has no record.
+remote_dropped() {  # $1 = branch
+    [ -n "$(git config --get "branch.$1.remote" 2>/dev/null || true)" ] || return 1
+    ! git rev-parse --verify --quiet "refs/remotes/origin/$1" >/dev/null
+}
+
 # Work of this branch's own that origin does not have. Counted by patch and
 # bounded by the base, because a branch rebased locally carries the base's
 # commits in origin/<branch>..HEAD: 410 of them on one worktree here, of which
@@ -341,6 +351,14 @@ report_unpushed() {
                 printf '%s\t%s\t%s\n' "$BRANCH" \
                     "not on origin, and carries no commits of its own" \
                     "git worktree remove $DIR && git branch -d $BRANCH   if it is finished with" >>"$NEEDS"
+            elif remote_dropped "$BRANCH"; then
+                # Origin had this branch and dropped it, which is what merging
+                # or closing its pull request does. Pushing it back reopens
+                # what that cleanup closed, so the command is offered with the
+                # question attached rather than as the obvious next step.
+                printf '%s\t%s\t%s\t%s\n' "$BRANCH" \
+                    "origin dropped this branch, and these commits exist only here" \
+                    "git push -u origin $BRANCH   only if it should come back" "$_n" >>"$NEEDS"
             else
                 printf '%s\t%s\t%s\t%s\n' "$BRANCH" \
                     "not on origin; these commits exist only here" \
@@ -938,6 +956,20 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY <&3; do
             BUCKET=rebased
         fi
 
+        # In --all a push has to earn itself twice over. A branch holding no
+        # commits of its own -- rebased down to exactly its base, or never
+        # carrying any -- would publish the base under a second name. A branch
+        # origin dropped is one whose pull request merged or closed, and
+        # pushing it back recreates what that cleanup removed; it then reads as
+        # live to --prune, which skips any branch still on origin, so the
+        # worktree this same run was asked to remove survives instead. On one
+        # branch you named it, so it stays yours to publish either way.
+        HOLDPUSH=0
+        if [ "$ALL" -eq 1 ]; then
+            [ -n "$(git -C "$DIR" rev-list -1 "$REF..HEAD" 2>/dev/null)" ] || HOLDPUSH=1
+            ! remote_dropped "$BRANCH" || HOLDPUSH=1
+        fi
+
         # In --all only what moved is worth pushing; a run over every worktree
         # should not fire off pushes for branches it did not touch. On one
         # branch you asked to publish it, whether or not the rebase had work.
@@ -945,7 +977,7 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY <&3; do
         # rewrites shas without adding work, so the first covers a restack the
         # PR needs and the second covers commits that were never sent. Neither
         # fires for a branch this run had no reason to touch.
-        if [ "$PUSH" -eq 1 ] \
+        if [ "$PUSH" -eq 1 ] && [ "$HOLDPUSH" -eq 0 ] \
            && { [ "$MOVED" -eq 1 ] || [ -n "$UNPUSHED" ] || [ "$ALL" -eq 0 ]; }; then
             if push_branch "$DIR" "$BRANCH" >"$PUSHOUT" 2>&1; then
                 if grep -q 'Everything up-to-date' "$PUSHOUT"; then

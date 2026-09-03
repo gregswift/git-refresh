@@ -156,7 +156,10 @@ Print git's own fetch, rebase and push output as well as the table.
 .TP
 .BR \-\-push\-with\-lease ", " \-\-please
 Push each branch this run rebased, refusing any push that would discard commits
-you have not seen. On by default; see
+you have not seen. Under
+.B \-\-all
+this holds back a branch with no commits of its own, and one origin no longer
+carries. On by default; see
 .B CONFIGURATION
 and
 .BR NOTES .

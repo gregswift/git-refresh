@@ -30,6 +30,19 @@ Origin moved after this run's fetch snapshot, so the lease failed and nothing wa
 
 then run `git refresh --please` again.
 
+## `origin dropped this branch`
+
+    origin dropped this branch, and these commits exist only here
+    → git push -u origin <branch>   only if it should come back
+
+Origin carried this branch once and does not now. Merging or closing its pull request is what removes it. The commits still here were never sent, or were sent and rewritten since.
+
+`git refresh --all` does not push it back. Recreating a branch the cleanup removed reopens what it closed, and origin holding the branch again stops `--prune` from removing the worktree.
+
+Read the commits before deciding. Where the work still matters, push it back with the command above. Where it does not:
+
+    git worktree remove <worktree> && git branch -D <branch>
+
 ## `autostash conflicted`
 
 The rebase completed and the branch moved, but your uncommitted changes did not reapply on top of the new base. The working tree holds the conflict and the stash entry is kept:
