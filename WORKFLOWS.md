@@ -271,6 +271,19 @@ The table says which branches need you. `--doctor` says what to do about the one
 
 It refuses `--all` and `--stack`, on purpose. Advice this specific does not scale to twenty branches, and the table is already the triage across them.
 
+It also needs a worktree to stand in, and a branch whose worktree directory was deleted has none. `--all` prints that branch's advice in the summary instead:
+
+    3 worktrees: 1 synced, 1 pushed, 1 other, 1 needing review
+
+    1 needs you: old-spike
+
+    🩺 old-spike
+
+      remote branch gone with no sign it was merged; review before removing
+      → git worktree remove ../old-spike && git branch -D old-spike
+
+Where some branches still have their worktrees and some do not, both appear: the unreachable ones get their advice inline, and the pointer to `--doctor` counts only the ones you can stand in.
+
 ## Removing worktrees that are finished
 
 `--prune` removes a worktree when its branch is gone from origin **and** there is evidence it was merged.
