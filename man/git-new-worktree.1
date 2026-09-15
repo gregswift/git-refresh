@@ -90,6 +90,8 @@ point into git config:
 .PP
 .EX
 git config branch.<branch>.base <base>
+git config branch.<branch>.forkBase <base>
+git config branch.<branch>.forkPoint <commit of base>
 .EE
 .PP
 .I base
@@ -105,6 +107,16 @@ has nothing to rebase it onto \(em it reports the branch as
 .B "no base"
 and leaves it alone. The key is plain git config and is safe to set or correct
 by hand.
+.PP
+.B forkPoint
+and
+.B forkBase
+record where the branch starts on that base.
+.BR git\-refresh (1)
+rebases from that commit with
+.B \-\-onto
+once the base is rewritten, by a squash merge or a conflict resolved by hand.
+A bare repository keeps no reflog to recover it from.
 .PP
 The new branch is created
 .B \-\-no\-track

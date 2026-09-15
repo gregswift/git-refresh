@@ -320,6 +320,19 @@ when it created the branch, and the fallback used when the branch has no open
 pull request. Safe to set by hand:
 .B "git config branch.<name>.base main"
 .TP
+.BI branch. <name> .forkPoint
+The commit of the base this branch was last rebased onto, and
+.BI branch. <name> .forkBase
+the base it belonged to. Written by
+.BR git\-new\-worktree (1)
+at creation and by every rebase this command completes. When the base has been
+rewritten since, the rebase runs as
+.B "git rebase \-\-onto"
+from this commit, so a commit removed from the base is removed from this branch
+too. It is ignored when it is no longer in the branch's history, or
+when the base changed while the old base is still open. See
+.BR "Squash merges" .
+.TP
 .BI branch. <name> .remote
 Read by
 .B \-\-prune
@@ -438,13 +451,20 @@ the push is refused and reported.
 When a base branch is squash\-merged, nothing git has for recognising "this work
 is already upstream" survives: patch\-ids differ, ancestry is broken, and both
 tips carry the same change by different routes. The branch above it will replay
-its parent's commits onto a base that already contains their content. The fix is
-.B "git rebase \-\-onto"
-by hand and, upstream of the tooling, enabling rebase merges on the repository.
-Expect
+its parent's commits onto a base that already contains their content. A conflict
+resolved by hand on the lower branch has the same effect.
+.PP
+The fix is
+.BR "git rebase \-\-onto" ,
+from where the branch sat on its old base. This command records that commit in
+.IB branch. <name> .forkPoint
+and uses it, and
 .B \-\-doctor
-to be optimistic about such a branch: it merges tips, and a squashed base looks
-clean right up until the rebase replays.
+predicts from it too. A branch with no record, one rebased by hand since its
+last refresh, and one whose merged base is still on origin all fall back to a
+plain rebase. For those, run
+.B "git rebase \-\-onto"
+by hand, or enable rebase merges on the repository.
 .
 .SH SEE ALSO
 .BR git\-new\-worktree (1),

@@ -728,6 +728,25 @@ git_rebase() {  # $1 = worktree dir, remaining args go to git rebase
     fi
 }
 
+# The recorded commit this branch last sat on in its base, when rebasing from
+# there skips more than a plain rebase does. Patch-id cannot match commits that a
+# squash merge or a hand-resolved conflict rewrote, so a plain rebase replays them.
+fork_point() {  # $1 = worktree dir, $2 = branch, $3 = base, $4 = base ref; prints a sha, or nothing
+    _fp=$(git config --get "branch.$2.forkPoint" 2>/dev/null) || return 0
+    _fb=$(git config --get "branch.$2.forkBase" 2>/dev/null) || return 0
+    git -C "$1" merge-base --is-ancestor "$_fp" "$2" 2>/dev/null || return 0
+    _mb=$(git -C "$1" merge-base "$4" "$2" 2>/dev/null) || return 0
+    ! git -C "$1" merge-base --is-ancestor "$_fp" "$_mb" 2>/dev/null || return 0
+    # A different base is a retarget unless the old one merged. After a
+    # retarget the branch still needs the old base's commits, and skipping
+    # from the record would drop them.
+    if [ "$_fb" != "$3" ]; then
+        ! git rev-parse --verify --quiet "refs/remotes/origin/$_fb" >/dev/null || return 0
+        [ -z "${REPO:-}" ] || [ -n "$(merged_into "$_fb")" ] || return 0
+    fi
+    printf '%s' "$_fp"
+}
+
 push_branch() {
     _lease=$(awk -F"$TAB" -v b="$2" '$1 == b { print $2; exit }' "$LEASES")
     if [ -n "$_lease" ]; then
@@ -891,6 +910,16 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY <&3; do
         fi
     fi
 
+    # After the sync, which can replace the history the record is checked against.
+    FORK=$(fork_point "$DIR" "$BRANCH" "$BASE" "$REF")
+    # `--onto X X` is the plain rebase, so one command covers both.
+    UPSTREAM=${FORK:-$REF}
+    if [ -n "$FORK" ]; then
+        REBASE_CMD="git rebase --onto $REF $(git -C "$DIR" rev-parse --short "$FORK")"
+    else
+        REBASE_CMD="git rebase $REF"
+    fi
+
     if [ "$DRY_RUN" -eq 1 ]; then
         # --doctor changes nothing, so it cannot learn about a conflict by
         # attempting the rebase. merge-tree does the same three-way merge in
@@ -901,7 +930,9 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY <&3; do
         # Predicted for any dry run, not just --doctor. Which branches will not
         # replay cleanly is the one thing a dry run knows that the branch list
         # does not, so withholding it leaves nothing behind but the names.
-        if ! git -C "$DIR" merge-tree --write-tree "$BRANCH" "$REF" >"$OUT" 2>&1 \
+        # A sha holds no whitespace, so the unquoted expansion stays one word.
+        if ! git -C "$DIR" merge-tree --write-tree ${FORK:+--merge-base=$FORK} \
+               "$BRANCH" "$REF" >"$OUT" 2>&1 \
            && grep -q '^[0-7]\{6\} [0-9a-f]* [123]	' "$OUT"; then
             CLASH=$(awk -F'\t' '/^[0-7]{6} [0-9a-f]+ [123]\t/ { print $2 }' "$OUT" | sort -u)
             NFILES=$(printf '%s' "$CLASH" | grep -c . || true)
@@ -910,7 +941,7 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY <&3; do
             note_row "$BRANCH" "$BASEDISP" warn "conflict, $NFILES $NOUN"
             printf '%s\t%s\t%s\t%s\n' "$BRANCH" \
                 "would conflict in $NFILES $NOUN against $REF" \
-                "git rebase $REF   to do it now and resolve them" \
+                "$REBASE_CMD   to do it now and resolve them" \
                 "$SAMPLE" >>"$NEEDS"
             bucket wouldclash
         else
@@ -929,7 +960,9 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY <&3; do
         continue
     fi
 
-    if git_rebase "$DIR" "$REF" >"$OUT" 2>&1; then
+    if git_rebase "$DIR" --onto "$REF" "$UPSTREAM" >"$OUT" 2>&1; then
+        git config "branch.$BRANCH.forkPoint" "$(git rev-parse "$REF")"
+        git config "branch.$BRANCH.forkBase" "$BASE"
         # A push clears this, and how much it published is worth saying.
         PRE_UNPUSHED=$UNPUSHED
         PUSHKIND=""
@@ -1052,7 +1085,7 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY <&3; do
             git_rebase "$DIR" --abort >/dev/null 2>&1 || true
             note_row "$BRANCH" "$BASEDISP" bad "conflict, $NFILES $NOUN"
             printf '%s\t%s\t%s\n' "$BRANCH" "$SAMPLE" \
-                "cd $DIR && git rebase $REF" >>"$NEEDS"
+                "cd $DIR && $REBASE_CMD" >>"$NEEDS"
         else
             # Standing in the branch and asking for it is asking to deal with
             # what comes back. Aborting here only means running the identical

@@ -68,11 +68,17 @@ So if the changeset on Branch A looks like this:
 
 It gets squashed to "Commit A" when squash merged to main. Branch B still carries Commits 1-3, so rebasing it onto main attempts to merge the changes from Commits 2-3, which are now part of Commit A, against Commit 1 in Branch B. That is a merge conflict, in code that already shipped.
 
-The correct operation is `git rebase --onto origin/main <old-base-tip> mybranch`, which drops the merged branch's commits and keeps only the ones above it. `git refresh` **cannot** do this for you: `<old-base-tip>` is exactly what a squash merge destroys. GitHub deletes the base branch on merge, and once that ref is gone there is no record of where the branch started (merge-base gives the wrong answer, it walks back to where the two branches last agreed, which is now further back than you want).
+The correct operation is `git rebase --onto origin/main <old-base-tip> mybranch`, which drops the merged branch's commits and keeps only the ones above it. `<old-base-tip>` is exactly what a squash merge destroys. GitHub deletes the base branch on merge, and merge-base gives the wrong answer: it walks back to where the two branches last agreed, which is further back than you want.
 
-The fix is upstream of the tooling. In repository settings, enable rebase merges and disable squash merges. Merge commits are not great either, but they do avoid this issue.
+`git refresh` keeps its own copy of `<old-base-tip>` in `branch.<name>.forkPoint`, and runs that `--onto` rebase for you. See **When the base is rewritten** in [WORKFLOWS.md](WORKFLOWS.md). The record does not cover these cases, and each one falls back to a plain rebase that conflicts:
 
-Where that is not your call, expect to fix stacked branches by hand with `--onto`, and expect `--doctor` to be wrong about them. It merges tips, so a squashed base looks clean right up until the rebase replays.
+* **A branch with no record.** `git worktree add` does not write one. Run `git refresh` on the branch once before its base merges, and it has one.
+* **A branch rebased by hand since its last refresh.** The record then points below where the branch sits. Run `git refresh` after the manual rebase to move it.
+* **A merged base that is still on origin.** Until the old base is deleted, a new base reads as a retarget, and a retarget keeps the old base's commits. Delete the merged branch, or turn on automatic branch deletion in repository settings.
+
+For any of these, run the `--onto` rebase above by hand, with the old base's last commit from its pull request.
+
+Rebase merges avoid the problem entirely. In repository settings, enable rebase merges and disable squash merges. Merge commits are not great either, but they do avoid this issue.
 
 Just as a reference because they are good write ups:
 

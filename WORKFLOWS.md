@@ -220,11 +220,20 @@ You do this when a change is too big to review in one piece and the pieces depen
 
 `--all` does the same across every worktree rather than one chain, and behaves identically in every other respect. It belongs to housekeeping rather than to stacks; see **The table is the triage**.
 
-## Squash merges break this
+## When the base is rewritten
 
-Squash merging the bottom of a stack destroys the commit identity every later rebase depends on, so the branch above replays work that is already in `main` and conflicts with it. `git refresh` cannot repair that, because the information needed to repair it is what the squash threw away.
+Two things rewrite the bottom of a stack so that its commits no longer match the copies the branch above still carries:
 
-If your repository squash merges, read [TROUBLESHOOTING.md](TROUBLESHOOTING.md#a-squash-merged-base-conflicts-on-rebase) before you build a stack on it. The short version: enable rebase merges and disable squash merges in repository settings. Merge commits are not great either, but they do avoid this issue.
+* You resolve a conflict on the lower branch by hand and push it.
+* The lower branch is squash merged into `main`.
+
+A plain rebase of the branch above replays those old copies against the new ones, and conflicts in code that is already settled.
+
+`git refresh` avoids that with a record of where each branch sits on its base. `git new-worktree` writes `branch.<name>.forkPoint` and `branch.<name>.forkBase` when it creates a branch. Every rebase `git refresh` completes moves them. When the base is rewritten, the next run rebases with `git rebase --onto origin/<base> <forkPoint>`, which carries only the branch's own commits across. `--doctor` predicts from the same record.
+
+The base decides which of its commits survive. A commit removed from the base is also removed from the branches above it. A plain rebase would keep that commit, and it would show in their pull requests.
+
+The record is used only while it is still in the branch's history, and only while the base is the same one, or the old base has merged. A pull request moved to a new base while the old one is still open keeps the old base's commits. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#a-squash-merged-base-conflicts-on-rebase) for the cases the record does not cover.
 
 # Housekeeping
 
