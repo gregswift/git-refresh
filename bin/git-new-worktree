@@ -285,6 +285,10 @@ else
     # The moment the base is known for certain. Without it a branch has no base
     # until its PR exists, and `git refresh --all` has nothing to rebase it onto.
     git config "branch.$BRANCH.base" "${BASE#origin/}"
+    # Where the branch starts on that base. `git refresh` needs it once the
+    # base is rewritten, and a bare repository keeps no reflog to recover it.
+    git config "branch.$BRANCH.forkPoint" "$(git rev-parse "$BASE")"
+    git config "branch.$BRANCH.forkBase" "${BASE#origin/}"
     printf '📂 %s created at %s from %s\n' "$BRANCH" "$DIR" "$BASE" >&2
 fi
 
