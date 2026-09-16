@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/gregswift/git-refresh/compare/v1.1.13...v1.2.0) (2026-09-16)
+
+
+### Features
+
+* rebase from the recorded fork point when a base is rewritten ([f3899fa](https://github.com/gregswift/git-refresh/commit/f3899fa3ae0f861c64895dc267fcedeb05ad5aa8))
+
 ## [1.1.13](https://github.com/gregswift/git-refresh/compare/v1.1.12...v1.1.13) (2026-09-03)
 
 
