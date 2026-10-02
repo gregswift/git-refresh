@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/gregswift/git-refresh/compare/v1.2.0...v1.2.1) (2026-10-02)
+
+
+### Fixes
+
+* skip the rebase for a merged branch that origin dropped ([a7aa624](https://github.com/gregswift/git-refresh/commit/a7aa624930742d678f29f24a9c85ef27594bab89))
+
 ## [1.2.0](https://github.com/gregswift/git-refresh/compare/v1.1.13...v1.2.0) (2026-09-16)
 
 
