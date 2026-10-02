@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.3](https://github.com/gregswift/git-refresh/compare/v1.2.2...v1.2.3) (2026-10-02)
+
+
+### Fixes
+
+* limit --prune to the worktrees the run covers ([2596b17](https://github.com/gregswift/git-refresh/commit/2596b1756afd83544077e8a0de53ca6963d19758))
+
 ## [1.2.2](https://github.com/gregswift/git-refresh/compare/v1.2.1...v1.2.2) (2026-10-02)
 
 
