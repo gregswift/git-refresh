@@ -473,8 +473,9 @@ row() {  # $1 = branch, $2 = base, $3 = severity, $4 = status, possibly empty
 
 # ---- what to work on -------------------------------------------------------
 
+list_worktrees >"$WORK.all"
 if [ "$ALL" -eq 1 ]; then
-    list_worktrees >"$WORK"
+    cp "$WORK.all" "$WORK"
 else
     CUR=$(git branch --show-current)
     [ -n "$CUR" ] || no_branch_here .
@@ -713,6 +714,91 @@ if [ "$ALL" -eq 1 ]; then
     ' "$PLAN" >"$PLAN.sorted" && mv "$PLAN.sorted" "$PLAN"
 fi
 
+# ---- decide what is finished ----------------------------------------------
+
+# Sets REASON and returns 0 when the branch looks merged into $DEFAULT.
+REASON=""
+is_merged() {
+    _branch=$1
+    REASON=""
+
+    if [ -n "${REPO:-}" ]; then
+        _pr=$(gh pr list -R "$REPO" --head "$_branch" --state merged \
+                --json number --jq '.[0].number // empty' 2>/dev/null) || _pr=""
+        if [ -n "$_pr" ]; then REASON="merged PR #$_pr"; return 0; fi
+    fi
+
+    if git merge-base --is-ancestor "$_branch" "origin/$DEFAULT" 2>/dev/null; then
+        REASON="already an ancestor of origin/$DEFAULT"
+        return 0
+    fi
+
+    # Squash-merge detection: build a throwaway commit carrying the branch tree
+    # on top of the fork point. If its patch is already upstream, the branch
+    # content landed even though no commit of it did.
+    _base=$(git merge-base "origin/$DEFAULT" "$_branch" 2>/dev/null) || return 1
+    _tree=$(git rev-parse "$_branch^{tree}" 2>/dev/null) || return 1
+    _probe=$(git commit-tree "$_tree" -p "$_base" -m "refresh prune probe" 2>/dev/null) || return 1
+    if git cherry "origin/$DEFAULT" "$_probe" 2>/dev/null | grep -q '^-'; then
+        REASON="tree already in origin/$DEFAULT (squash-merged)"
+        return 0
+    fi
+
+    return 1
+}
+
+N_PRUNED=0; N_UNMERGED=0
+PRUNABLE="$TMPDIR_RUN/prunable"; : >"$PRUNABLE"
+PRUNEWARN="$TMPDIR_RUN/prunewarn"; : >"$PRUNEWARN"
+
+# Decided before any rebase, so a worktree this run removes is never rebased.
+if [ "$PRUNE" -eq 1 ]; then
+    # Pruning is repo-wide whatever the refresh touched, so this walks every
+    # worktree rather than the plan.
+    MAIN_WT=$(git worktree list --porcelain | awk '/^worktree /{print substr($0,10); exit}')
+    CWD=$(pwd -P)
+
+    while IFS="$TAB" read -r BRANCH DIR; do
+        [ -n "${DIR:-}" ] || continue
+        [ "$BRANCH" != "-" ] && [ "$BRANCH" != "$DEFAULT" ] || continue
+        [ "$DIR" != "$MAIN_WT" ] || continue
+        case "$CWD" in "$DIR"|"$DIR"/*) continue ;; esac
+
+        # Still on origin -> the branch is live, nothing to do.
+        ! git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null || continue
+
+        # branch.<name>.remote survives the remote branch being pruned, so it is
+        # the signal that this branch was pushed at some point. Never pushed
+        # means never merged, so there is nothing here to clean up.
+        [ -n "$(git config --get "branch.$BRANCH.remote" 2>/dev/null || true)" ] || continue
+
+        # The directory may already be gone: git calls such a worktree prunable,
+        # and there is then nothing to be dirty and only admin data to remove.
+        MISSING=0
+        if [ ! -d "$DIR" ]; then
+            MISSING=1
+        elif [ -n "$(git -C "$DIR" status --porcelain)" ]; then
+            printf '%s\n' "$(paint warn "$BRANCH: remote gone but the worktree has uncommitted work")" >>"$PRUNEWARN"
+            printf '%s\t%s\t%s\n' "$BRANCH" \
+                "remote branch gone, but this worktree still has changes" \
+                "cd $DIR && git status" >>"$NEEDS"
+            N_UNMERGED=$((N_UNMERGED + 1))
+            continue
+        fi
+
+        if ! is_merged "$BRANCH"; then
+            printf '%s\n' "$(paint warn "$BRANCH: remote gone with no sign it was merged")" >>"$PRUNEWARN"
+            printf '%s\t%s\t%s\n' "$BRANCH" \
+                "remote branch gone with no sign it was merged; review before removing" \
+                "git worktree remove $DIR && git branch -D $BRANCH" >>"$NEEDS"
+            N_UNMERGED=$((N_UNMERGED + 1))
+            continue
+        fi
+
+        printf '%s\t%s\t%s\t%s\n' "$BRANCH" "$DIR" "$MISSING" "$REASON" >>"$PRUNABLE"
+    done <"$WORK.all"
+fi
+
 # ---- do the work -----------------------------------------------------------
 
 # In --all the rebases are speculative and thrown away, so they have no business
@@ -772,7 +858,7 @@ fi
 
 N_REBASED=0; N_CURRENT=0; N_CONFLICT=0; N_DIRTY=0; N_NOBASE=0; N_OTHER=0
 N_TOTAL=0; N_WOULD=0; N_PUSHED=0; N_REFUSED=0; N_WOULDCLASH=0
-N_SYNCED=0; N_DIVERGED=0
+N_SYNCED=0; N_DIVERGED=0; N_MERGED=0
 
 # Count $BRANCH under bucket $1, and remember which, so a later prune can
 # un-count it.
@@ -794,6 +880,11 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY <&3; do
         row "$(basename "$DIR")" "-" skip "detached"
         bucket other; continue
     fi
+    # The prune pass below counts and reports it.
+    if awk -F"$TAB" -v b="$BRANCH" '$1 == b { f = 1 } END { exit !f }' "$PRUNABLE"; then
+        row "$BRANCH" "-" plain "merged"
+        continue
+    fi
     if [ ! -d "$DIR" ]; then
         # --prune clears the record itself, but only for a branch already gone
         # from origin. A branch still live there with a missing directory is
@@ -808,6 +899,21 @@ while IFS="$TAB" read -r BRANCH DIR BASE WHY <&3; do
                 "git worktree prune" >>"$NEEDS"
         fi
         bucket other; continue
+    fi
+    # One branch you asked for by name is still rebased.
+    if [ "$ALL" -eq 1 ] && remote_dropped "$BRANCH" && is_merged "$BRANCH"; then
+        if [ -n "$(git -C "$DIR" status --porcelain)" ]; then
+            row "$BRANCH" "-" warn "merged, uncommitted work here"
+            # The prune pass already filed it.
+            [ "$PRUNE" -eq 1 ] || printf '%s\t%s\t%s\n' "$BRANCH" \
+                "remote branch gone, but this worktree still has changes" \
+                "cd $DIR && git status" >>"$NEEDS"
+        elif [ "$PRUNE" -eq 1 ]; then
+            row "$BRANCH" "-" plain "merged"
+        else
+            row "$BRANCH" "-" plain "merged, --prune removes it"
+        fi
+        bucket merged; continue
     fi
     if [ "$BASE" = "-" ]; then
         row "$BRANCH" "-" skip "no base"
@@ -1113,39 +1219,6 @@ done 3<"$PLAN"
 
 # ---- clear out what is finished --------------------------------------------
 
-# Sets REASON and returns 0 when the branch looks merged into $DEFAULT.
-REASON=""
-is_merged() {
-    _branch=$1
-    REASON=""
-
-    if [ -n "${REPO:-}" ]; then
-        _pr=$(gh pr list -R "$REPO" --head "$_branch" --state merged \
-                --json number --jq '.[0].number // empty' 2>/dev/null) || _pr=""
-        if [ -n "$_pr" ]; then REASON="merged PR #$_pr"; return 0; fi
-    fi
-
-    if git merge-base --is-ancestor "$_branch" "origin/$DEFAULT" 2>/dev/null; then
-        REASON="already an ancestor of origin/$DEFAULT"
-        return 0
-    fi
-
-    # Squash-merge detection: build a throwaway commit carrying the branch tree
-    # on top of the fork point. If its patch is already upstream, the branch
-    # content landed even though no commit of it did.
-    _base=$(git merge-base "origin/$DEFAULT" "$_branch" 2>/dev/null) || return 1
-    _tree=$(git rev-parse "$_branch^{tree}" 2>/dev/null) || return 1
-    _probe=$(git commit-tree "$_tree" -p "$_base" -m "refresh prune probe" 2>/dev/null) || return 1
-    if git cherry "origin/$DEFAULT" "$_probe" 2>/dev/null | grep -q '^-'; then
-        REASON="tree already in origin/$DEFAULT (squash-merged)"
-        return 0
-    fi
-
-    return 1
-}
-
-N_PRUNED=0; N_UNMERGED=0
-
 # Forget branch $1: a removed worktree needs nothing from you, and was not,
 # in the end, a push refused or a branch with no base.
 forget_needs() {
@@ -1159,55 +1232,14 @@ forget_needs() {
 }
 
 if [ "$PRUNE" -eq 1 ]; then
-    # Pruning is repo-wide whatever the refresh touched, so this walks every
-    # worktree rather than the plan.
-    PRUNEWORK="$TMPDIR_RUN/prunework"
-    list_worktrees >"$PRUNEWORK"
-    MAIN_WT=$(git worktree list --porcelain | awk '/^worktree /{print substr($0,10); exit}')
-    CWD=$(pwd -P)
-
-    while IFS="$TAB" read -r BRANCH DIR; do
-        [ -n "${DIR:-}" ] || continue
-        [ "$BRANCH" != "-" ] && [ "$BRANCH" != "$DEFAULT" ] || continue
-        [ "$DIR" != "$MAIN_WT" ] || continue
-        case "$CWD" in "$DIR"|"$DIR"/*) continue ;; esac
-
-        # Still on origin -> the branch is live, nothing to do.
-        ! git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null || continue
-
-        # branch.<name>.remote survives the remote branch being pruned, so it is
-        # the signal that this branch was pushed at some point. Never pushed
-        # means never merged, so there is nothing here to clean up.
-        [ -n "$(git config --get "branch.$BRANCH.remote" 2>/dev/null || true)" ] || continue
-
-        # The directory may already be gone: git calls such a worktree prunable,
-        # and there is then nothing to be dirty and only admin data to remove.
-        MISSING=0
-        if [ ! -d "$DIR" ]; then
-            MISSING=1
-        elif [ -n "$(git -C "$DIR" status --porcelain)" ]; then
-            printf '%s\n' "$(paint warn "$BRANCH: remote gone but the worktree has uncommitted work")" >&2
-            printf '%s\t%s\t%s\n' "$BRANCH" \
-                "remote branch gone, but this worktree still has changes" \
-                "cd $DIR && git status" >>"$NEEDS"
-            N_UNMERGED=$((N_UNMERGED + 1))
-            continue
-        fi
-
-        if ! is_merged "$BRANCH"; then
-            printf '%s\n' "$(paint warn "$BRANCH: remote gone with no sign it was merged")" >&2
-            printf '%s\t%s\t%s\n' "$BRANCH" \
-                "remote branch gone with no sign it was merged; review before removing" \
-                "git worktree remove $DIR && git branch -D $BRANCH" >>"$NEEDS"
-            N_UNMERGED=$((N_UNMERGED + 1))
-            continue
-        fi
-
+    [ ! -s "$PRUNEWARN" ] || cat "$PRUNEWARN" >&2
+    while IFS="$TAB" read -r BRANCH DIR MISSING REASON; do
         [ "$MISSING" -eq 1 ] && VERB="stale record for" || VERB="worktree"
 
         if [ "$DRY_RUN" -eq 1 ]; then
             printf '%s\n' "$(paint "" "would remove $VERB $BRANCH ($REASON)" "$I_PRUNE")"
             N_PRUNED=$((N_PRUNED + 1))
+            forget_needs "$BRANCH"
             continue
         fi
 
@@ -1237,8 +1269,9 @@ if [ "$PRUNE" -eq 1 ]; then
         printf '%s\n' "$(paint ok "removed $BRANCH ($REASON)" "$I_PRUNE")"
         N_PRUNED=$((N_PRUNED + 1))
         forget_needs "$BRANCH"
-    done <"$PRUNEWORK"
+    done <"$PRUNABLE"
 fi
+
 
 # ---- what happened ---------------------------------------------------------
 
@@ -1268,6 +1301,7 @@ add_summary "$N_CONFLICT" "conflicted"
 add_summary "$N_DIRTY"    "dirty"
 add_summary "$N_NOBASE"   "no base"
 add_summary "$N_OTHER"    "other"
+add_summary "$N_MERGED"   "merged"
 [ "$DRY_RUN" -eq 1 ] && add_summary "$N_PRUNED" "to remove" || add_summary "$N_PRUNED" "removed"
 add_summary "$N_UNMERGED" "needing review"
 
