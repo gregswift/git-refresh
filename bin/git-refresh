@@ -78,7 +78,8 @@ Options:
                   are both held back.
   --prune         Remove worktrees whose branch is gone from origin and was
                   merged. Never touches one with changes, one you are standing
-                  in, or one with no sign of having been merged.
+                  in, or one with no sign of having been merged. Covers only
+                  the run: --all every worktree, --stack its stack.
   --sync          Adopt origin/<branch> before rebasing, when this branch was
                   rewritten elsewhere and holds nothing origin lacks. It is
                   replayed onto the remote rather than reset onto it, so work
@@ -473,9 +474,8 @@ row() {  # $1 = branch, $2 = base, $3 = severity, $4 = status, possibly empty
 
 # ---- what to work on -------------------------------------------------------
 
-list_worktrees >"$WORK.all"
 if [ "$ALL" -eq 1 ]; then
-    cp "$WORK.all" "$WORK"
+    list_worktrees >"$WORK"
 else
     CUR=$(git branch --show-current)
     [ -n "$CUR" ] || no_branch_here .
@@ -753,12 +753,12 @@ PRUNEWARN="$TMPDIR_RUN/prunewarn"; : >"$PRUNEWARN"
 
 # Decided before any rebase, so a worktree this run removes is never rebased.
 if [ "$PRUNE" -eq 1 ]; then
-    # Pruning is repo-wide whatever the refresh touched, so this walks every
-    # worktree rather than the plan.
+    # The plan, not every worktree: --stack prunes only its stack. One branch
+    # prunes nothing, because you are standing in it.
     MAIN_WT=$(git worktree list --porcelain | awk '/^worktree /{print substr($0,10); exit}')
     CWD=$(pwd -P)
 
-    while IFS="$TAB" read -r BRANCH DIR; do
+    while IFS="$TAB" read -r BRANCH DIR REST; do
         [ -n "${DIR:-}" ] || continue
         [ "$BRANCH" != "-" ] && [ "$BRANCH" != "$DEFAULT" ] || continue
         [ "$DIR" != "$MAIN_WT" ] || continue
@@ -796,7 +796,7 @@ if [ "$PRUNE" -eq 1 ]; then
         fi
 
         printf '%s\t%s\t%s\t%s\n' "$BRANCH" "$DIR" "$MISSING" "$REASON" >>"$PRUNABLE"
-    done <"$WORK.all"
+    done <"$PLAN"
 fi
 
 # ---- do the work -----------------------------------------------------------

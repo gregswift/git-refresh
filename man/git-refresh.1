@@ -173,7 +173,13 @@ Remove worktrees whose branch is gone from origin and shows evidence of having
 been merged, and delete the branch with them. Never touches a worktree with
 changes, the one you are standing in, the main worktree, the default branch, or
 one with no sign of having been merged; those are reported instead. A branch
-that was never pushed is never pruned. Off by default.
+that was never pushed is never pruned. Only worktrees the run covers are
+pruned:
+.B \-\-all
+covers every worktree,
+.B \-\-stack
+its stack, and a single\-branch run none, because you stand in that branch.
+Off by default.
 .IP
 With or without
 .BR \-\-prune ,
