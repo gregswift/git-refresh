@@ -17,7 +17,9 @@ There are two terms used throughout and that are not standard git vocabulary:
 
 One workflow to rule them all. These are the defaults that hold up across the repositories where a rebase-based workflow is the standard. Each workflow can be treated as optional or overrideable and for the most part you should be able to perform all the commands manually with no conflicting behaviors.
 
-These workflows will either run into issues or completely break if your repository merges by squash or forbids force-pushing to PR branches. This is called out in those sections.
+These workflows break if your repository forbids force-pushing to pull request branches, because publishing a rebase needs a force-push. See **Pushing a rebased branch**.
+
+A repository that merges by squash works. `git refresh` rebases the branches above a squash merge without the conflicts a plain rebase produces. See **When the base is rewritten**. [TROUBLESHOOTING.md](TROUBLESHOOTING.md#a-squash-merged-base-conflicts-on-rebase) lists the cases that still conflict.
 
 The one thing you lose by running the native commands instead is the recorded base: `git worktree add` does not write `branch.<name>.base`, so until that branch has an open pull request `git refresh` has to fall back on inference. See **Where the base comes from**.
 
