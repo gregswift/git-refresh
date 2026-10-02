@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.2](https://github.com/gregswift/git-refresh/compare/v1.2.1...v1.2.2) (2026-10-02)
+
+
+### Documentation
+
+* limit the squash merge warning to the cases that still conflict ([65a4d49](https://github.com/gregswift/git-refresh/commit/65a4d4980e0de575cca6eaf0412160f370995d11))
+
 ## [1.2.1](https://github.com/gregswift/git-refresh/compare/v1.2.0...v1.2.1) (2026-10-02)
 
 
