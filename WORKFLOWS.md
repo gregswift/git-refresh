@@ -301,6 +301,7 @@ Where some branches still have their worktrees and some do not, both appear: the
 
 * It **never** touches a worktree with uncommitted changes, one you are standing in, or one with no sign of having been merged. Those are reported and left for you.
 * A branch that was never pushed is never pruned. Never pushed means never merged, so there is nothing to clean up, and it may be the only copy.
+* `--all` never rebases a merged branch that origin dropped, with or without `--prune`. A rebase there only conflicts with the squash of its own commits. The row says `merged, --prune removes it`, or `merged, uncommitted work here` when `--prune` would hold the worktree back.
 * This is a different operation from `fetch.prune`, despite the name. That one deletes remote-tracking refs; this one removes the worktree directory and deletes the local branch.
 * Unlike `fetch.prune`, which only deletes remote-tracking refs, this removes the worktree directory and deletes the local branch.
 
